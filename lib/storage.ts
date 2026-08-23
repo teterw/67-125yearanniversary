@@ -22,7 +22,8 @@ export interface Settings {
   /** "cycle" = a full six-seven (two swaps). "swap" = every hand alternation. */
   countMode: CountMode;
   mirror: boolean;
-  showSkeleton: boolean;
+  /** Fill in swaps the camera missed, from the tempo you've established. */
+  prediction: boolean;
   sound: boolean;
   countdownSeconds: number;
   /** Minimum ms between two swaps — kills landmark jitter double-counts. */
@@ -44,14 +45,14 @@ export interface ScoreEntry {
 export const DEFAULT_SETTINGS: Settings = {
   playerName: "",
   roundSeconds: 30,
-  sensitivity: 0.55,
+  sensitivity: 0.32,
   smoothing: 0.35,
   countMode: "cycle",
   mirror: true,
-  showSkeleton: true,
+  prediction: true,
   sound: true,
   countdownSeconds: 3,
-  cooldownMs: 90,
+  cooldownMs: 70,
   deviceId: null,
 };
 
@@ -101,11 +102,11 @@ export function loadSettings(): Settings {
     roundSeconds: clamp(Number(stored.roundSeconds) || DEFAULT_SETTINGS.roundSeconds, 5, 300),
     sensitivity: migrating
       ? DEFAULT_SETTINGS.sensitivity
-      : clamp(Number(stored.sensitivity) || DEFAULT_SETTINGS.sensitivity, 0.15, 1.5),
+      : clamp(Number(stored.sensitivity) || DEFAULT_SETTINGS.sensitivity, 0.1, 1.5),
     smoothing: clamp(Number(stored.smoothing ?? DEFAULT_SETTINGS.smoothing), 0, 1),
     countMode: stored.countMode === "swap" ? "swap" : "cycle",
     mirror: stored.mirror ?? DEFAULT_SETTINGS.mirror,
-    showSkeleton: stored.showSkeleton ?? DEFAULT_SETTINGS.showSkeleton,
+    prediction: stored.prediction ?? DEFAULT_SETTINGS.prediction,
     sound: stored.sound ?? DEFAULT_SETTINGS.sound,
     countdownSeconds: clamp(Number(stored.countdownSeconds ?? DEFAULT_SETTINGS.countdownSeconds), 0, 10),
     cooldownMs: clamp(Number(stored.cooldownMs) || DEFAULT_SETTINGS.cooldownMs, 30, 500),

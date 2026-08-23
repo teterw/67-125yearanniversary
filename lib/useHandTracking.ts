@@ -108,7 +108,9 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
         const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
         const fileset = await FilesetResolver.forVisionTasks(WASM_PATH);
         const base = {
-          numHands: 2,
+          // Detect more than the two we need, so `selectPair` can discard
+          // bystanders instead of MediaPipe silently picking their hands.
+          numHands: 4,
           runningMode: "VIDEO" as const,
           // Deliberately loose: the six-seven gesture moves fast enough to blur
           // frames, and stricter thresholds drop a hand mid-rep.

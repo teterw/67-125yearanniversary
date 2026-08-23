@@ -123,10 +123,10 @@ export default function SettingsPage() {
         <Section title="Detection">
           <Row
             label="Travel"
-            hint="How far your hands must separate before a swap registers, in palm lengths. Lower is twitchier. Measured against your hand size, so it holds at any distance from the camera."
+            hint="How far your hands must separate before a swap registers, in palm lengths. Lower scores more easily; too low and jitter counts on its own. Measured against your hand size, so it holds at any distance from the camera."
           >
             <Slider
-              min={0.15}
+              min={0.1}
               max={1.5}
               step={0.05}
               value={settings.sensitivity}
@@ -175,6 +175,13 @@ export default function SettingsPage() {
             </select>
           </Row>
 
+          <Toggle
+            label="Rhythm assist"
+            hint="Once you settle into a tempo, a swap the camera misses is filled in from the beat instead of dropped. Turn it off to count only what the camera actually sees."
+            value={settings.prediction}
+            onChange={(v) => update("prediction", v)}
+          />
+
           <Row label="Live test" hint="Try the detector without touching your scores.">
             <Chip active={testing} onClick={() => setTesting((t) => !t)}>
               {testing ? "Stop" : "Start"}
@@ -194,12 +201,6 @@ export default function SettingsPage() {
             hint="Selfie view — your right hand appears on the right."
             value={settings.mirror}
             onChange={(v) => update("mirror", v)}
-          />
-          <Toggle
-            label="Hand skeleton overlay"
-            hint="Draws the tracked landmarks over the feed."
-            value={settings.showSkeleton}
-            onChange={(v) => update("showSkeleton", v)}
           />
           <Toggle
             label="Sound effects"

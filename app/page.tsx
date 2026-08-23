@@ -5,8 +5,8 @@ import CameraStage from "@/components/CameraStage";
 import MenuScreen from "@/components/MenuScreen";
 import GameScreen from "@/components/GameScreen";
 import ResultsScreen, { type RunResult } from "@/components/ResultsScreen";
-import { SixtySevenDetector, observeHands, type Side } from "@/lib/detector";
-import { clearCanvas, drawHands } from "@/lib/draw";
+import { SixtySevenDetector, observeHands, selectPair, type HandObservation, type Side } from "@/lib/detector";
+import { drawMarkers, type Marker } from "@/lib/draw";
 import { useHandTracking, type TrackerFrame } from "@/lib/useHandTracking";
 import { DEFAULT_SETTINGS, loadLeaderboard, saveScore, saveSettings, type ScoreEntry } from "@/lib/storage";
 import { useLeaderboard, useSettings } from "@/lib/useStore";
@@ -23,6 +23,24 @@ interface Hud {
 }
 
 const EMPTY_HUD: Hud = { handsVisible: 0, side: null, signal: 0, halfway: false, rate: 0 };
+
+/** One dot per detected hand: solid for the counted pair, faint for the rest. */
+function markersFor(observed: HandObservation[], tracked: HandObservation[]): Marker[] {
+  const topIndex =
+    tracked.length >= 2
+      ? tracked.reduce((best, o) => (o.y < best.y ? o : best), tracked[0]).index
+      : null;
+  return observed.map((o) => ({
+    x: o.x,
+    y: o.y,
+    scale: o.scale,
+    role: !tracked.some((t) => t.index === o.index)
+      ? ("ignored" as const)
+      : o.index === topIndex
+        ? ("top" as const)
+        : ("tracked" as const),
+  }));
+}
 
 export default function Home() {
   const settings = useSettings();
@@ -54,6 +72,7 @@ export default function Home() {
       cooldownMs: DEFAULT_SETTINGS.cooldownMs,
       countMode: DEFAULT_SETTINGS.countMode,
       smoothing: DEFAULT_SETTINGS.smoothing,
+      prediction: DEFAULT_SETTINGS.prediction,
     });
   }
 
@@ -68,46 +87,45 @@ export default function Home() {
       cooldownMs: settings.cooldownMs,
       countMode: settings.countMode,
       smoothing: settings.smoothing,
+      prediction: settings.prediction,
     });
-  }, [settings.sensitivity, settings.cooldownMs, settings.countMode, settings.smoothing]);
+  }, [
+    settings.sensitivity,
+    settings.cooldownMs,
+    settings.countMode,
+    settings.smoothing,
+    settings.prediction,
+  ]);
 
   /* ------------------------------------------------------------ frame loop */
 
   const handleFrame = useCallback(({ hands, time }: TrackerFrame) => {
     const detector = detectorRef.current;
-    const canvas = canvasRef.current;
     const video = videoRef.current;
+    const canvas = canvasRef.current;
     if (!detector) return;
 
     const aspect = video && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
     const observed = observeHands(hands, aspect);
-
-    // Highlight whichever hand is currently on top.
-    const top = observed.reduce<typeof observed[number] | null>(
-      (best, o) => (best === null || o.y < best.y ? o : best),
-      null,
-    );
-
-    if (canvas && video) {
-      drawHands(canvas, video, hands, {
-        showSkeleton: settingsRef.current.showSkeleton,
-        topIndex: observed.length >= 2 && top ? top.index : null,
-        dim: phaseRef.current !== "playing",
-      });
-    }
-
-    const handsVisible = Math.min(2, observed.length);
+    const paint = (tracked: HandObservation[]) => {
+      if (canvas && video) drawMarkers(canvas, video, markersFor(observed, tracked));
+    };
 
     if (phaseRef.current !== "playing") {
-      // Menu/results only need a coarse "are your hands in frame" readout.
+      // Off the clock the detector must not run, so the same closest-pair rule
+      // runs standalone just to show which hands would be counted.
+      const tracked = selectPair(observed);
+      paint(tracked);
       if (time - hudAtRef.current > 200) {
         hudAtRef.current = time;
+        const handsVisible = Math.min(2, tracked.length);
         setHud((prev) => (prev.handsVisible === handsVisible ? prev : { ...EMPTY_HUD, handsVisible }));
       }
       return;
     }
 
     const frame = detector.update(observed, time);
+    paint(frame.tracked);
 
     if (frame.scored) {
       setCount(frame.count);
@@ -160,6 +178,7 @@ export default function Home() {
       cooldownMs: current.cooldownMs,
       countMode: current.countMode,
       smoothing: current.smoothing,
+      prediction: current.prediction,
     });
     detectorRef.current?.reset();
     setCount(0);
@@ -205,11 +224,6 @@ export default function Home() {
     }, 100);
     return () => window.clearInterval(id);
   }, [phase, finishRound]);
-
-  // Skeleton overlay is stale the moment tracking stops drawing it.
-  useEffect(() => {
-    if (!settings.showSkeleton) clearCanvas(canvasRef.current);
-  }, [settings.showSkeleton]);
 
   /* -------------------------------------------------------------- shortcuts */
 

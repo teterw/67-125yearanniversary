@@ -43,12 +43,6 @@ export default function CameraStage({
         className="absolute inset-0 h-full w-full object-cover"
         style={{ transform: flip }}
       />
-      <canvas
-        ref={canvasRef}
-        className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-        style={{ transform: flip }}
-      />
-
       {/* Always-on scrim: keeps the HUD legible over a bright, busy feed. */}
       <div
         className="pointer-events-none absolute inset-0"
@@ -64,6 +58,13 @@ export default function CameraStage({
           background:
             "radial-gradient(120% 90% at 50% 30%, rgba(5,5,10,0.35) 0%, rgba(5,5,10,0.82) 62%, rgba(5,5,10,0.95) 100%)",
         }}
+      />
+
+      {/* Tracking dots sit above the scrims so they stay crisp in the menu. */}
+      <canvas
+        ref={canvasRef}
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+        style={{ transform: flip }}
       />
 
       {status !== "ready" && status !== "error" && (

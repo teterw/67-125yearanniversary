@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SixtySevenDetector, observeHands } from "@/lib/detector";
-import { drawHands } from "@/lib/draw";
+import { drawMarkers } from "@/lib/draw";
 import { useHandTracking, type TrackerFrame } from "@/lib/useHandTracking";
 import type { Settings } from "@/lib/storage";
 
@@ -32,6 +32,7 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
       cooldownMs: settings.cooldownMs,
       countMode: settings.countMode,
       smoothing: settings.smoothing,
+      prediction: settings.prediction,
     });
   }
 
@@ -41,30 +42,46 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
       cooldownMs: settings.cooldownMs,
       countMode: settings.countMode,
       smoothing: settings.smoothing,
+      prediction: settings.prediction,
     });
-  }, [settings.sensitivity, settings.cooldownMs, settings.countMode, settings.smoothing]);
+  }, [
+    settings.sensitivity,
+    settings.cooldownMs,
+    settings.countMode,
+    settings.smoothing,
+    settings.prediction,
+  ]);
 
   const handleFrame = useCallback(({ hands: detected, time }: TrackerFrame) => {
     const detector = detectorRef.current;
-    const canvas = canvasRef.current;
     const video = videoRef.current;
+    const canvas = canvasRef.current;
     if (!detector) return;
 
     const aspect = video && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
     const observed = observeHands(detected, aspect);
-    const top = observed.reduce<typeof observed[number] | null>(
-      (best, o) => (best === null || o.y < best.y ? o : best),
-      null,
-    );
-    if (canvas && video) {
-      drawHands(canvas, video, detected, {
-        showSkeleton: settingsRef.current.showSkeleton,
-        topIndex: observed.length >= 2 && top ? top.index : null,
-        dim: false,
-      });
-    }
-
     const frame = detector.update(observed, time);
+
+    if (canvas && video) {
+      const topIndex =
+        frame.tracked.length >= 2
+          ? frame.tracked.reduce((best, o) => (o.y < best.y ? o : best), frame.tracked[0]).index
+          : null;
+      drawMarkers(
+        canvas,
+        video,
+        observed.map((o) => ({
+          x: o.x,
+          y: o.y,
+          scale: o.scale,
+          role: !frame.tracked.some((t) => t.index === o.index)
+            ? ("ignored" as const)
+            : o.index === topIndex
+              ? ("top" as const)
+              : ("tracked" as const),
+        })),
+      );
+    }
     if (frame.scored) setCount(frame.count);
     if (time - hudAtRef.current > 80) {
       hudAtRef.current = time;

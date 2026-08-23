@@ -1,27 +1,29 @@
-import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
+/**
+ * Draws one dot per hand the camera found: solid for the two being counted,
+ * faint for anything the closest-pair filter dropped. No skeleton — just enough
+ * to see what is being tracked and what is being ignored.
+ */
 
-/** MediaPipe's 21-point hand skeleton, inlined so the drawing path stays light. */
-const CONNECTIONS: [number, number][] = [
-  [0, 1], [1, 2], [2, 3], [3, 4],
-  [0, 5], [5, 6], [6, 7], [7, 8],
-  [9, 10], [10, 11], [11, 12],
-  [13, 14], [14, 15], [15, 16],
-  [0, 17], [17, 18], [18, 19], [19, 20],
-  [5, 9], [9, 13], [13, 17],
-];
+const TAU = Math.PI * 2;
 
-export interface DrawOptions {
-  showSkeleton: boolean;
-  /** Which hand is currently on top: highlights it so the motion is readable. */
-  topIndex: number | null;
-  dim: boolean;
+export type MarkerRole = "top" | "tracked" | "ignored";
+
+export interface Marker {
+  /** Palm centre, normalized to the frame. */
+  x: number;
+  y: number;
+  /** Palm length in frame-height units — sets the dot size. */
+  scale: number;
+  role: MarkerRole;
 }
 
-export function drawHands(
+const TRACKED = "#22e0ff";
+const TOP = "#ffd23f";
+
+export function drawMarkers(
   canvas: HTMLCanvasElement,
   video: HTMLVideoElement,
-  hands: NormalizedLandmark[][],
-  { showSkeleton, topIndex, dim }: DrawOptions,
+  markers: Marker[],
 ) {
   const w = video.videoWidth;
   const h = video.videoHeight;
@@ -34,59 +36,45 @@ export function drawHands(
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.clearRect(0, 0, w, h);
-  if (!showSkeleton || hands.length === 0) return;
 
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
+  for (const marker of markers) {
+    // Size off the hand, not the frame, so a distant hand still reads clearly.
+    const radius = Math.max(4, marker.scale * h * 0.2);
+    const x = marker.x * w;
+    const y = marker.y * h;
 
-  hands.forEach((hand, i) => {
-    if (hand.length < 21) return;
-
-    // Everything is sized off the hand's own palm length. Scaling off the frame
-    // instead makes a distant hand render as a clump of dots with the bones
-    // buried underneath.
-    const palm = Math.hypot((hand[9].x - hand[0].x) * w, (hand[9].y - hand[0].y) * h);
-    const bone = Math.max(1.4, palm * 0.13);
-    const joint = Math.max(1, bone * 0.62);
-
-    const hot = topIndex === i;
-    const stroke = hot ? "#ffd23f" : "#22e0ff";
-    ctx.globalAlpha = dim ? 0.55 : 1;
-
-    const path = new Path2D();
-    for (const [a, b] of CONNECTIONS) {
-      path.moveTo(hand[a].x * w, hand[a].y * h);
-      path.lineTo(hand[b].x * w, hand[b].y * h);
-    }
-
-    // Dark casing first, so the skeleton survives a bright, busy camera feed.
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = "rgba(3,3,8,0.75)";
-    ctx.lineWidth = bone * 1.9;
-    ctx.stroke(path);
-
-    ctx.strokeStyle = stroke;
-    ctx.shadowColor = stroke;
-    ctx.shadowBlur = bone * 2;
-    ctx.lineWidth = bone;
-    ctx.stroke(path);
-
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = hot ? "#fff3c4" : "#e8fbff";
-    ctx.strokeStyle = "rgba(3,3,8,0.75)";
-    ctx.lineWidth = Math.max(0.8, bone * 0.28);
-    for (const p of hand) {
+    if (marker.role === "ignored") {
+      // Seen, deliberately not counted — shown so it's obvious why.
       ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, joint, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.arc(x, y, radius * 0.85, 0, TAU);
+      ctx.strokeStyle = "rgba(255,255,255,0.45)";
+      ctx.lineWidth = Math.max(1.2, radius * 0.18);
       ctx.stroke();
+      continue;
     }
 
-    ctx.globalAlpha = 1;
-  });
-}
+    const color = marker.role === "top" ? TOP : TRACKED;
 
-export function clearCanvas(canvas: HTMLCanvasElement | null) {
-  if (!canvas) return;
-  canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    // Dark backing keeps the dot readable over a bright, busy feed.
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 1.65, 0, TAU);
+    ctx.fillStyle = "rgba(3,3,8,0.45)";
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, TAU);
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = radius * 1.6;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 1.65, 0, TAU);
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = Math.max(1, radius * 0.18);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
 }
