@@ -17,8 +17,8 @@ export interface Marker {
   role: MarkerRole;
 }
 
-const TRACKED = "#22e0ff";
-const TOP = "#ffd23f";
+const TRACKED = "#5d6fe3";
+const TOP = "#e0bc7c";
 
 export function drawMarkers(
   canvas: HTMLCanvasElement,
@@ -58,7 +58,7 @@ export function drawMarkers(
     // Dark backing keeps the dot readable over a bright, busy feed.
     ctx.beginPath();
     ctx.arc(x, y, radius * 1.65, 0, TAU);
-    ctx.fillStyle = "rgba(3,3,8,0.45)";
+    ctx.fillStyle = "rgba(4,6,16,0.45)";
     ctx.fill();
 
     ctx.beginPath();

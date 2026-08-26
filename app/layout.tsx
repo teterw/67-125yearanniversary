@@ -13,12 +13,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "67 Counter",
-  description: "Camera-tracked six-seven counter with a local leaderboard.",
+  title: "67 × 125 — Anniversary Race",
+  description:
+    "Camera-tracked six-seven race to 125, for the 125th anniversary of the Brothers of St. Gabriel, Province of Thailand.",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#05050a",
+  themeColor: "#070a18",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,

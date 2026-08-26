@@ -5,7 +5,13 @@ import CameraStage from "@/components/CameraStage";
 import MenuScreen from "@/components/MenuScreen";
 import GameScreen from "@/components/GameScreen";
 import ResultsScreen, { type RunResult } from "@/components/ResultsScreen";
-import { SixtySevenDetector, observeHands, selectPair, type HandObservation, type Side } from "@/lib/detector";
+import {
+  SixtySevenDetector,
+  observeHands,
+  selectPair,
+  type HandObservation,
+  type Side,
+} from "@/lib/detector";
 import { drawMarkers, type Marker } from "@/lib/draw";
 import { useHandTracking, type TrackerFrame } from "@/lib/useHandTracking";
 import { DEFAULT_SETTINGS, loadLeaderboard, saveScore, saveSettings, type ScoreEntry } from "@/lib/storage";
@@ -18,11 +24,26 @@ interface Hud {
   handsVisible: number;
   side: Side | null;
   signal: number;
+  threshold: number;
   halfway: boolean;
   rate: number;
+  /** 0..1 — how much of each swing the camera is actually resolving. */
+  quality: number;
+  fps: number;
+  solo: boolean;
 }
 
-const EMPTY_HUD: Hud = { handsVisible: 0, side: null, signal: 0, halfway: false, rate: 0 };
+const EMPTY_HUD: Hud = {
+  handsVisible: 0,
+  side: null,
+  signal: 0,
+  threshold: DEFAULT_SETTINGS.sensitivity,
+  halfway: false,
+  rate: 0,
+  quality: 0,
+  fps: 0,
+  solo: false,
+};
 
 /** One dot per detected hand: solid for the counted pair, faint for the rest. */
 function markersFor(observed: HandObservation[], tracked: HandObservation[]): Marker[] {
@@ -48,7 +69,7 @@ export default function Home() {
   const [phase, setPhase] = useState<Phase>("menu");
   const [count, setCount] = useState(0);
   const [pulse, setPulse] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.roundSeconds);
+  const [elapsed, setElapsed] = useState(0);
   const [countdown, setCountdown] = useState(0);
   const [hud, setHud] = useState<Hud>(EMPTY_HUD);
   const [run, setRun] = useState<RunResult | null>(null);
@@ -61,6 +82,10 @@ export default function Home() {
   const phaseRef = useRef<Phase>("menu");
   const settingsRef = useRef(settings);
   const hudAtRef = useRef(0);
+  /** performance.now() the clock started, on the same timebase as the detector. */
+  const startedAtRef = useRef(0);
+  /** Held in a ref so the frame loop can end the race without being re-created. */
+  const finishRef = useRef<(completed: boolean, at: number) => void>(() => {});
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -73,6 +98,7 @@ export default function Home() {
       countMode: DEFAULT_SETTINGS.countMode,
       smoothing: DEFAULT_SETTINGS.smoothing,
       prediction: DEFAULT_SETTINGS.prediction,
+      adaptive: DEFAULT_SETTINGS.adaptive,
     });
   }
 
@@ -88,6 +114,7 @@ export default function Home() {
       countMode: settings.countMode,
       smoothing: settings.smoothing,
       prediction: settings.prediction,
+      adaptive: settings.adaptive,
     });
   }, [
     settings.sensitivity,
@@ -95,6 +122,7 @@ export default function Home() {
     settings.countMode,
     settings.smoothing,
     settings.prediction,
+    settings.adaptive,
   ]);
 
   /* ------------------------------------------------------------ frame loop */
@@ -127,10 +155,17 @@ export default function Home() {
     const frame = detector.update(observed, time);
     paint(frame.tracked);
 
+    const target = settingsRef.current.target;
     if (frame.scored) {
       setCount(frame.count);
       setPulse((p) => p + 1);
-      if (settingsRef.current.sound) countBlip(frame.count);
+      if (settingsRef.current.sound) countBlip(frame.count, target);
+      if (frame.count >= target) {
+        // Stop on the interpolated crossing of the last rep, not on the frame
+        // that happened to notice it — that is up to a frame of free time.
+        finishRef.current(true, frame.scoredAt);
+        return;
+      }
     }
 
     if (time - hudAtRef.current > 80) {
@@ -139,8 +174,12 @@ export default function Home() {
         handsVisible: frame.handsVisible,
         side: frame.side,
         signal: frame.signal,
+        threshold: frame.threshold,
         halfway: frame.halfway,
         rate: detector.rate(time),
+        quality: frame.quality,
+        fps: frame.fps,
+        solo: frame.solo,
       });
     }
   }, []);
@@ -151,24 +190,37 @@ export default function Home() {
     onFrame: handleFrame,
   });
 
-  /* --------------------------------------------------------- game lifecycle */
+  /* --------------------------------------------------------- run lifecycle */
 
-  const finishRound = useCallback(() => {
-    if (phaseRef.current !== "playing") return;
-    const detector = detectorRef.current!;
-    const current = settingsRef.current;
-    setRun({
-      score: detector.count,
-      roundSeconds: current.roundSeconds,
-      peakRate: detector.peakRate(),
-      countMode: current.countMode,
-    });
-    setBoardBefore(loadLeaderboard());
-    setSaved(null);
-    setHud(EMPTY_HUD);
-    go("results");
-    if (current.sound) finishJingle();
-  }, [go]);
+  const finishRun = useCallback(
+    (completed: boolean, at: number) => {
+      if (phaseRef.current !== "playing") return;
+      const detector = detectorRef.current!;
+      const current = settingsRef.current;
+      const timeMs = Math.max(0, at - startedAtRef.current);
+      setElapsed(timeMs);
+      setRun({
+        timeMs,
+        target: current.target,
+        count: detector.count,
+        completed,
+        peakRate: detector.peakRate(),
+        countMode: current.countMode,
+      });
+      setBoardBefore(loadLeaderboard());
+      setSaved(null);
+      setHud(EMPTY_HUD);
+      go("results");
+      if (current.sound && completed) finishJingle();
+    },
+    [go],
+  );
+
+  useEffect(() => {
+    finishRef.current = finishRun;
+  }, [finishRun]);
+
+  const abortRun = useCallback(() => finishRun(false, performance.now()), [finishRun]);
 
   const startGame = useCallback(() => {
     primeAudio();
@@ -179,12 +231,13 @@ export default function Home() {
       countMode: current.countMode,
       smoothing: current.smoothing,
       prediction: current.prediction,
+      adaptive: current.adaptive,
     });
     detectorRef.current?.reset();
     setCount(0);
     setPulse(0);
     setHud(EMPTY_HUD);
-    setTimeLeft(current.roundSeconds);
+    setElapsed(0);
     if (current.countdownSeconds > 0) {
       setCountdown(current.countdownSeconds);
       go("countdown");
@@ -195,11 +248,11 @@ export default function Home() {
 
   const backToMenu = useCallback(() => {
     setHud(EMPTY_HUD);
-    setTimeLeft(settingsRef.current.roundSeconds);
+    setElapsed(0);
     go("menu");
   }, [go]);
 
-  // Countdown ticks down, then hands off to the round.
+  // Countdown ticks down, then hands off to the race.
   useEffect(() => {
     if (phase !== "countdown") return;
     if (settingsRef.current.sound) countdownBlip(countdown);
@@ -211,19 +264,17 @@ export default function Home() {
     return () => window.clearTimeout(t);
   }, [phase, countdown, go]);
 
-  // Round clock.
+  // The clock. It counts up now — the race ends when the 125th 67 lands, so the
+  // display just tracks the same timebase the detector timestamps swaps on.
   useEffect(() => {
     if (phase !== "playing") return;
-    const duration = settingsRef.current.roundSeconds;
-    const startedAt = performance.now();
-    setTimeLeft(duration);
+    // `elapsed` was already zeroed on start; the interval owns it from here.
+    startedAtRef.current = performance.now();
     const id = window.setInterval(() => {
-      const remaining = Math.max(0, duration - (performance.now() - startedAt) / 1000);
-      setTimeLeft(remaining);
-      if (remaining <= 0) finishRound();
-    }, 100);
+      setElapsed(performance.now() - startedAtRef.current);
+    }, 50);
     return () => window.clearInterval(id);
-  }, [phase, finishRound]);
+  }, [phase]);
 
   /* -------------------------------------------------------------- shortcuts */
 
@@ -238,23 +289,23 @@ export default function Home() {
         if (status === "ready") startGame();
       }
       if (e.code === "Escape") {
-        if (phaseRef.current === "playing") finishRound();
+        if (phaseRef.current === "playing") abortRun();
         else if (phaseRef.current !== "menu") backToMenu();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [startGame, finishRound, backToMenu, status]);
+  }, [startGame, abortRun, backToMenu, status]);
 
   /* ------------------------------------------------------------------ save */
 
   const handleSave = useCallback(
     (name: string) => {
-      if (!run) return;
+      if (!run || !run.completed) return;
       const result = saveScore({
         name,
-        score: run.score,
-        roundSeconds: run.roundSeconds,
+        timeMs: run.timeMs,
+        target: run.target,
         peakRate: run.peakRate,
         countMode: run.countMode,
       });
@@ -309,17 +360,21 @@ export default function Home() {
         {phase === "playing" && (
           <GameScreen
             count={count}
+            target={settings.target}
+            countMode={settings.countMode}
             pulse={pulse}
-            timeLeft={timeLeft}
-            roundSeconds={settings.roundSeconds}
+            elapsed={elapsed}
             handsVisible={hud.handsVisible}
             side={hud.side}
             signal={hud.signal}
-            sensitivity={settings.sensitivity}
+            threshold={hud.threshold}
             mirror={settings.mirror}
             halfway={hud.halfway}
             rate={hud.rate}
-            onAbort={finishRound}
+            quality={hud.quality}
+            fps={hud.fps}
+            solo={hud.solo}
+            onAbort={abortRun}
           />
         )}
 

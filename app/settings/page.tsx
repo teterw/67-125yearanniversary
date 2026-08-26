@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import CameraPreview from "@/components/CameraPreview";
+import { AnniversaryMark, Contributors } from "@/components/Logo";
 import Leaderboard from "@/components/Leaderboard";
 import {
+  ANNIVERSARY_TARGET,
   clearLeaderboard,
   removeScore,
   resetSettings,
@@ -14,7 +16,8 @@ import {
 import { listCameras } from "@/lib/useHandTracking";
 import { useLeaderboard, useSettings } from "@/lib/useStore";
 
-const ROUND_PRESETS = [15, 30, 60, 120];
+/** 125 for the anniversary; the rest are for practice and for tuning. */
+const TARGET_PRESETS = [ANNIVERSARY_TARGET, 67, 25, 10];
 const COUNTDOWN_PRESETS = [0, 3, 5];
 
 export default function SettingsPage() {
@@ -34,55 +37,54 @@ export default function SettingsPage() {
     saveSettings({ ...settings, [key]: value });
 
   return (
-    <div className="h-dvh overflow-y-auto scroll-thin bg-[#05050a]">
+    <div className="h-dvh overflow-y-auto scroll-thin bg-[#070a18]">
       <div className="mx-auto max-w-2xl px-5 py-10">
         <header className="mb-8 flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-black tracking-tight">Settings</h1>
-            <p className="mt-1 text-sm text-white/50">Tuned per browser, stored locally.</p>
+          <div className="flex min-w-0 items-center gap-4">
+            <AnniversaryMark size={56} className="hidden sm:grid" />
+            <div className="min-w-0">
+              <h1 className="text-3xl font-black tracking-tight">Settings</h1>
+              <p className="mt-1 text-sm text-white/50">Tuned per browser, stored locally.</p>
+            </div>
           </div>
           <Link
             href="/"
-            className="shrink-0 rounded-full bg-gradient-to-r from-[#22e0ff] to-[#ff2fb0] px-5 py-2.5 text-xs font-black uppercase tracking-[0.15em] text-[#05050a] transition hover:scale-[1.03]"
+            className="shrink-0 rounded-full bg-gradient-to-r from-[#3a4bbf] via-[#5d6fe3] to-[#e4454f] px-5 py-2.5 text-xs font-black uppercase tracking-[0.15em] text-white transition hover:scale-[1.03]"
           >
             Back to game
           </Link>
         </header>
 
         <Section title="Player">
-          <Row label="Name" hint="Pre-filled when you save a score.">
+          <Row label="Name" hint="Pre-filled when you save a time.">
             <input
               value={settings.playerName}
               onChange={(e) => update("playerName", e.target.value.slice(0, 20))}
               maxLength={20}
               placeholder="ANON"
-              className="w-44 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none transition placeholder:text-white/25 focus:border-[#22e0ff]/70"
+              className="w-44 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none transition placeholder:text-white/25 focus:border-[#5d6fe3]/70"
             />
           </Row>
         </Section>
 
-        <Section title="Round">
-          <Row label="Length" hint="How long a round lasts.">
+        <Section title="Run">
+          <Row label="Target" hint="Six-sevens to land before the clock stops.">
             <div className="flex flex-wrap items-center gap-1.5">
-              {ROUND_PRESETS.map((s) => (
-                <Chip
-                  key={s}
-                  active={settings.roundSeconds === s}
-                  onClick={() => update("roundSeconds", s)}
-                >
-                  {s}s
+              {TARGET_PRESETS.map((n) => (
+                <Chip key={n} active={settings.target === n} onClick={() => update("target", n)}>
+                  {n}
                 </Chip>
               ))}
               <input
                 type="number"
-                min={5}
-                max={300}
-                value={settings.roundSeconds}
+                min={1}
+                max={999}
+                value={settings.target}
                 onChange={(e) =>
-                  update("roundSeconds", Math.min(300, Math.max(5, Number(e.target.value) || 5)))
+                  update("target", Math.min(999, Math.max(1, Math.round(Number(e.target.value) || 1))))
                 }
-                aria-label="Custom round length in seconds"
-                className="w-20 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 text-sm outline-none focus:border-[#22e0ff]/70"
+                aria-label="Custom target"
+                className="w-20 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 text-sm outline-none focus:border-[#5d6fe3]/70"
               />
             </div>
           </Row>
@@ -123,7 +125,7 @@ export default function SettingsPage() {
         <Section title="Detection">
           <Row
             label="Travel"
-            hint="How far your hands must separate before a swap registers, in palm lengths. Lower scores more easily; too low and jitter counts on its own. Measured against your hand size, so it holds at any distance from the camera."
+            hint="How far your hands must separate before a swap registers, in palm lengths. Lower scores more easily; too low and jitter counts on its own. Measured against your hand size, so it holds at any distance from the camera. With the blur assist on this is the ceiling, not a fixed bar."
           >
             <Slider
               min={0.1}
@@ -164,7 +166,7 @@ export default function SettingsPage() {
             <select
               value={settings.deviceId ?? ""}
               onChange={(e) => update("deviceId", e.target.value || null)}
-              className="w-56 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none focus:border-[#22e0ff]/70"
+              className="w-56 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none focus:border-[#5d6fe3]/70"
             >
               <option value="">Default camera</option>
               {cameras.map((c, i) => (
@@ -176,13 +178,20 @@ export default function SettingsPage() {
           </Row>
 
           <Toggle
+            label="Blur & low-FPS assist"
+            hint="Sizes the travel threshold to the swing your camera is actually resolving, keeps counting from one hand when the other blurs out, and eases off smoothing as your reps get faster. Turn it off for a fixed, literal threshold."
+            value={settings.adaptive}
+            onChange={(v) => update("adaptive", v)}
+          />
+
+          <Toggle
             label="Rhythm assist"
             hint="Once you settle into a tempo, a swap the camera misses is filled in from the beat instead of dropped. Turn it off to count only what the camera actually sees."
             value={settings.prediction}
             onChange={(v) => update("prediction", v)}
           />
 
-          <Row label="Live test" hint="Try the detector without touching your scores.">
+          <Row label="Live test" hint="Try the detector, and read your camera's real frame rate, without touching the board.">
             <Chip active={testing} onClick={() => setTesting((t) => !t)}>
               {testing ? "Stop" : "Start"}
             </Chip>
@@ -247,8 +256,10 @@ export default function SettingsPage() {
           </div>
         </Section>
 
-        <p className="pb-6 pt-2 text-center text-xs text-white/30">
-          Scores and settings live in this browser&apos;s local storage only.
+        <Contributors className="pt-2" />
+
+        <p className="pb-6 pt-6 text-center text-xs text-white/30">
+          Times and settings live in this browser&apos;s local storage only.
         </p>
       </div>
     </div>
@@ -302,7 +313,7 @@ function Chip({
       aria-pressed={active}
       className={`rounded-lg px-3 py-1.5 text-xs font-bold uppercase tracking-[0.1em] transition ${
         active
-          ? "bg-[#22e0ff] text-[#05050a]"
+          ? "bg-[#5d6fe3] text-white"
           : "border border-white/15 text-white/60 hover:border-white/35 hover:text-white"
       }`}
     >
@@ -335,7 +346,7 @@ function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/15 accent-[#22e0ff]"
+        className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/15 accent-[#5d6fe3]"
       />
       <span className="w-14 shrink-0 text-right font-mono text-xs tabular-nums text-white/60">
         {format(value)}
@@ -363,7 +374,7 @@ function Toggle({
         aria-checked={value}
         aria-label={label}
         onClick={() => onChange(!value)}
-        className={`relative h-7 w-12 rounded-full transition ${value ? "bg-[#22e0ff]" : "bg-white/15"}`}
+        className={`relative h-7 w-12 rounded-full transition ${value ? "bg-[#5d6fe3]" : "bg-white/15"}`}
       >
         <span
           className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${

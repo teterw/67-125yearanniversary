@@ -34,7 +34,7 @@ export default function CameraStage({
   const flip = mirror ? "scaleX(-1)" : "none";
 
   return (
-    <div className="absolute inset-0 overflow-hidden bg-[#05050a]">
+    <div className="absolute inset-0 overflow-hidden bg-[#070a18]">
       <video
         ref={videoRef}
         playsInline
@@ -48,7 +48,7 @@ export default function CameraStage({
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            "linear-gradient(180deg, rgba(5,5,10,0.7) 0%, rgba(5,5,10,0.18) 26%, rgba(5,5,10,0.18) 62%, rgba(5,5,10,0.8) 100%)",
+            "linear-gradient(180deg, rgba(7,10,24,0.7) 0%, rgba(7,10,24,0.18) 26%, rgba(7,10,24,0.18) 62%, rgba(7,10,24,0.8) 100%)",
         }}
       />
       <div
@@ -56,7 +56,7 @@ export default function CameraStage({
         style={{
           opacity: dim ? 1 : 0,
           background:
-            "radial-gradient(120% 90% at 50% 30%, rgba(5,5,10,0.35) 0%, rgba(5,5,10,0.82) 62%, rgba(5,5,10,0.95) 100%)",
+            "radial-gradient(120% 90% at 50% 30%, rgba(7,10,24,0.35) 0%, rgba(7,10,24,0.82) 62%, rgba(7,10,24,0.95) 100%)",
         }}
       />
 
@@ -67,10 +67,11 @@ export default function CameraStage({
         style={{ transform: flip }}
       />
 
+      {/* Sits low rather than dead-centre: the menu owns the middle of the screen. */}
       {status !== "ready" && status !== "error" && (
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div className="absolute inset-x-0 bottom-6 flex justify-center">
           <div className="flex items-center gap-3 rounded-full panel px-5 py-2.5 text-sm text-white/70">
-            <span className="h-2.5 w-2.5 animate-ping rounded-full bg-[#22e0ff]" />
+            <span className="h-2.5 w-2.5 animate-ping rounded-full bg-[#5d6fe3]" />
             {STATUS_LABEL[status]}
           </div>
         </div>
@@ -79,7 +80,7 @@ export default function CameraStage({
       {status === "error" && (
         <div className="absolute inset-0 flex items-center justify-center p-6">
           <div className="panel max-w-sm rounded-2xl p-6 text-center">
-            <p className="text-lg font-semibold text-[#ff2fb0]">Camera unavailable</p>
+            <p className="text-lg font-semibold text-[#e4454f]">Camera unavailable</p>
             <p className="mt-2 text-sm leading-relaxed text-white/65">{error}</p>
             <button
               type="button"

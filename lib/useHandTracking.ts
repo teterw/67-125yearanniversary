@@ -5,10 +5,18 @@ import type { HandLandmarker, NormalizedLandmark } from "@mediapipe/tasks-vision
 
 export type TrackerStatus = "idle" | "starting" | "loading" | "ready" | "error";
 
+export type Delegate = "GPU" | "CPU";
+
 export interface TrackerFrame {
   hands: NormalizedLandmark[][];
   /** performance.now() of this frame. */
   time: number;
+  /** Measured detection rate. */
+  fps: number;
+  /** Smoothed cost of one `detectForVideo` call. */
+  inferenceMs: number;
+  /** Current downscale applied to the frame before inference, 0..1. */
+  inputScale: number;
 }
 
 interface Options {
@@ -21,6 +29,33 @@ interface Options {
 
 const WASM_PATH = "/mediapipe/wasm";
 const MODEL_PATH = "/mediapipe/models/hand_landmarker.task";
+
+/**
+ * Capture is deliberately not maxed out. Motion blur, not resolution, is what
+ * loses a fast hand, and a shorter exposure is what fixes it — so we ask for the
+ * highest frame rate the camera will give and only as many pixels as the model
+ * can actually use. 1280x720 at 30 fps looks nicer and tracks worse.
+ */
+const IDEAL_WIDTH = 960;
+const IDEAL_HEIGHT = 540;
+const IDEAL_FPS = 60;
+
+/** Fallback capture, tried once when the camera can't keep up at the ideal. */
+const FALLBACK_WIDTH = 640;
+const FALLBACK_HEIGHT = 360;
+/** Below this measured rate, drop resolution to buy frames. */
+const SLOW_FPS = 24;
+/** How long to watch before deciding the feed is slow. */
+const RETUNE_AFTER_MS = 2500;
+
+/** Steps the inference input is scaled through when we fall behind. */
+const SCALE_STEPS = [1, 0.8, 0.65, 0.5];
+/** Inference slower than this is eating frames; scale the input down. */
+const SCALE_DOWN_MS = 18;
+/** Comfortably under budget: try a sharper input again. */
+const SCALE_UP_MS = 9;
+/** Minimum gap between scale changes, so it can't oscillate every frame. */
+const SCALE_HOLD_MS = 800;
 
 function describeCameraError(err: unknown): string {
   const name = err instanceof DOMException ? err.name : "";
@@ -42,6 +77,13 @@ function describeCameraError(err: unknown): string {
  * Owns the webcam stream and the MediaPipe hand landmarker, and pushes every
  * processed frame to `onFrame`. The video element is created by the caller and
  * handed back through the returned ref.
+ *
+ * Two things here exist purely to keep the detection rate up on modest hardware:
+ * the frame handed to MediaPipe is downscaled when inference starts eating the
+ * frame budget (the model works from a 192px crop, so a 960px upload is mostly
+ * wasted bandwidth), and a feed that still can't reach 24 fps gets one attempt
+ * at a lower capture resolution. Both are reported back on every frame so the UI
+ * can say so out loud instead of just counting badly.
  */
 export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
   const onFrameRef = useRef(onFrame);
@@ -51,6 +93,7 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
   const lastVideoTimeRef = useRef(-1);
 
   const [status, setStatus] = useState<TrackerStatus>("idle");
+  const [delegate, setDelegate] = useState<Delegate | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
@@ -73,11 +116,15 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
       setError(null);
       setStatus("starting");
 
+      const size = {
+        width: { ideal: IDEAL_WIDTH },
+        height: { ideal: IDEAL_HEIGHT },
+        frameRate: { ideal: IDEAL_FPS },
+      };
+
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: deviceId
-            ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
-            : { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: deviceId ? { deviceId: { exact: deviceId }, ...size } : { facingMode: "user", ...size },
           audio: false,
         });
       } catch (err) {
@@ -108,29 +155,39 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
         const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
         const fileset = await FilesetResolver.forVisionTasks(WASM_PATH);
         const base = {
-          // Detect more than the two we need, so `selectPair` can discard
-          // bystanders instead of MediaPipe silently picking their hands.
-          numHands: 4,
+          // Two, not four. In VIDEO mode MediaPipe re-runs the palm detector
+          // whenever it is tracking fewer hands than this — so asking for four
+          // when two are present pays for full detection on *every* frame, for
+          // the sole benefit of letting `selectPair` discard bystanders. That
+          // trade is backwards on a machine that is already struggling: the
+          // frames it costs are the frames a fast rep needs.
+          numHands: 2,
           runningMode: "VIDEO" as const,
           // Deliberately loose: the six-seven gesture moves fast enough to blur
-          // frames, and stricter thresholds drop a hand mid-rep.
-          minHandDetectionConfidence: 0.4,
-          minHandPresenceConfidence: 0.4,
-          minTrackingConfidence: 0.4,
+          // frames, and stricter thresholds drop a hand mid-rep. The detector
+          // can work from one hand, so a half-confident reading is worth having.
+          minHandDetectionConfidence: 0.2,
+          minHandPresenceConfidence: 0.2,
+          minTrackingConfidence: 0.2,
         };
         let landmarker: HandLandmarker;
+        let chosen: Delegate = "GPU";
         try {
           landmarker = await HandLandmarker.createFromOptions(fileset, {
             baseOptions: { modelAssetPath: MODEL_PATH, delegate: "GPU" },
             ...base,
           });
         } catch {
-          // Some Linux/WebGL setups can't take the GPU delegate.
+          // Some WebGL setups can't take the GPU delegate — and some browsers
+          // withhold it as a fingerprinting defence, which is worth being able
+          // to see, since the CPU fallback is several times slower.
+          chosen = "CPU";
           landmarker = await HandLandmarker.createFromOptions(fileset, {
             baseOptions: { modelAssetPath: MODEL_PATH, delegate: "CPU" },
             ...base,
           });
         }
+        setDelegate(chosen);
 
         if (cancelled) {
           landmarker.close();
@@ -146,22 +203,109 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
         return;
       }
 
-      const process = () => {
+      /* ------------------------------------------------ keeping the rate up */
+
+      const work = document.createElement("canvas");
+      const workCtx = work.getContext("2d", { alpha: false, willReadFrequently: false });
+
+      let fps = 0;
+      let inferenceMs = 0;
+      let step = 0;
+      let lastStepAt = 0;
+      let lastAt = 0;
+      let lastStamp = 0;
+      let retunedAt = 0;
+      let retuned = false;
+
+      /** Copies the frame into a smaller canvas so MediaPipe uploads less. */
+      const downscaled = (el: HTMLVideoElement, scale: number) => {
+        if (!workCtx) return el;
+        const w = Math.max(160, Math.round(el.videoWidth * scale));
+        const h = Math.max(90, Math.round(el.videoHeight * scale));
+        if (work.width !== w || work.height !== h) {
+          work.width = w;
+          work.height = h;
+        }
+        workCtx.drawImage(el, 0, 0, w, h);
+        return work;
+      };
+
+      /**
+       * One attempt at a cheaper capture format when the feed is genuinely slow.
+       * Lower resolution usually comes with a shorter exposure, so this buys
+       * sharper hands as well as more frames.
+       */
+      const retune = (now: number) => {
+        if (retuned || fps === 0 || fps >= SLOW_FPS) return;
+        if (retunedAt === 0) retunedAt = now;
+        if (now - retunedAt < RETUNE_AFTER_MS) return;
+        retuned = true;
+        const track = stream?.getVideoTracks()[0];
+        void track
+          ?.applyConstraints({
+            width: { ideal: FALLBACK_WIDTH },
+            height: { ideal: FALLBACK_HEIGHT },
+            frameRate: { ideal: IDEAL_FPS },
+          })
+          .catch(() => {
+            // The camera kept what it had; the input downscale still applies.
+          });
+      };
+
+      const process = (dedupe: boolean) => {
         const el = videoRef.current;
         const landmarker = landmarkerRef.current;
         if (!el || !landmarker || el.readyState < 2) return;
 
-        // detectForVideo rejects repeated timestamps, so skip stale frames.
-        if (el.currentTime === lastVideoTimeRef.current) return;
-        lastVideoTimeRef.current = el.currentTime;
+        // Only the repaint-driven path can be handed the same image twice.
+        // requestVideoFrameCallback fires once per *decoded* frame, and some
+        // browsers quantise currentTime for fingerprinting — testing it there
+        // throws away frames that were genuinely new.
+        if (dedupe) {
+          if (el.currentTime === lastVideoTimeRef.current) return;
+          lastVideoTimeRef.current = el.currentTime;
+        }
 
-        const time = performance.now();
+        // detectForVideo rejects a timestamp it has already seen, and browsers
+        // that coarsen performance.now() can hand us the same reading twice.
+        const clock = performance.now();
+        const time = clock > lastStamp ? clock : lastStamp + 1;
+        lastStamp = time;
+        if (lastAt > 0) {
+          const instant = 1000 / Math.max(1, Math.min(250, time - lastAt));
+          fps = fps === 0 ? instant : fps + 0.1 * (instant - fps);
+        }
+        lastAt = time;
+
+        const scale = SCALE_STEPS[step];
         try {
-          const result = landmarker.detectForVideo(el, time);
-          onFrameRef.current({ hands: result.landmarks ?? [], time });
+          const source = scale < 0.99 ? downscaled(el, scale) : el;
+          const result = landmarker.detectForVideo(source, time);
+          const took = performance.now() - time;
+          inferenceMs = inferenceMs === 0 ? took : inferenceMs + 0.2 * (took - inferenceMs);
+          onFrameRef.current({
+            hands: result.landmarks ?? [],
+            time,
+            fps,
+            inferenceMs,
+            inputScale: scale,
+          });
         } catch {
           // A dropped frame is not worth tearing the session down.
         }
+
+        // Trade sharpness for rate, one step at a time and never twice in a row
+        // in under SCALE_HOLD_MS, so a single slow frame can't start a slide.
+        if (time - lastStepAt > SCALE_HOLD_MS) {
+          if (inferenceMs > SCALE_DOWN_MS && step < SCALE_STEPS.length - 1) {
+            step += 1;
+            lastStepAt = time;
+          } else if (inferenceMs < SCALE_UP_MS && step > 0) {
+            step -= 1;
+            lastStepAt = time;
+          }
+        }
+        retune(time);
       };
 
       // requestVideoFrameCallback fires once per decoded camera frame, so we
@@ -170,13 +314,13 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
       if (useVideoCallback) {
         const onVideoFrame = () => {
           vfcRef.current = video.requestVideoFrameCallback(onVideoFrame);
-          process();
+          process(false);
         };
         vfcRef.current = video.requestVideoFrameCallback(onVideoFrame);
       } else {
         const tick = () => {
           rafRef.current = requestAnimationFrame(tick);
-          process();
+          process(true);
         };
         rafRef.current = requestAnimationFrame(tick);
       }
@@ -198,7 +342,7 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
     };
   }, [deviceId, attempt, videoRef]);
 
-  return { status, error, retry };
+  return { status, error, retry, delegate };
 }
 
 /** Camera picker data for the settings page. Labels need an active grant. */

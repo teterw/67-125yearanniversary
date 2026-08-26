@@ -3,11 +3,13 @@
 @theme inline {
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --color-ink: #05050a;
-  --color-haze: #0d0d18;
-  --color-neon: #22e0ff;
-  --color-hot: #ff2fb0;
-  --color-gold: #ffd23f;
+  /* Taken from the 125th anniversary mark: royal #243084, crimson #c02424,
+     gold #c0a878 — lightened only as far as legibility on a dark stage needs. */
+  --color-ink: #070a18;
+  --color-haze: #0d1226;
+  --color-royal: #5d6fe3;
+  --color-crimson: #e4454f;
+  --color-gold: #e0bc7c;
 }
 
 :root {
@@ -15,31 +17,46 @@
 }
 
 body {
-  background: var(--color-ink);
-  color: #f4f4ff;
+  /* Navy rather than black: the ground the logo's blue half sits on. */
+  background:
+    radial-gradient(120% 80% at 50% -10%, #131a3a 0%, transparent 60%),
+    var(--color-ink);
+  color: #f2f3fb;
   font-family: var(--font-geist-sans), system-ui, sans-serif;
   overflow: hidden;
   overscroll-behavior: none;
 }
 
-/* Neon plate used by the big numerals and titles. */
+/* Gilt plate behind the big numerals and titles. */
 .glow-text {
   text-shadow:
-    0 0 12px rgba(34, 224, 255, 0.55),
-    0 0 42px rgba(255, 47, 176, 0.35);
+    0 0 12px rgba(224, 188, 124, 0.5),
+    0 0 42px rgba(93, 111, 227, 0.42);
 }
 
 .glow-ring {
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.09) inset,
-    0 0 34px -12px rgba(34, 224, 255, 0.7);
+    0 0 34px -12px rgba(93, 111, 227, 0.75);
 }
 
 .panel {
-  background: rgba(9, 9, 20, 0.68);
+  background: rgba(9, 13, 30, 0.72);
   backdrop-filter: blur(14px) saturate(140%);
   -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(224, 188, 124, 0.16);
+}
+
+/*
+ * The mark carries black ring text, so on a dark stage it needs its own light
+ * ground rather than a recolour — a white coin with a gold rim.
+ */
+.coin {
+  background: radial-gradient(circle at 50% 42%, #ffffff 0%, #fbf7ef 62%, #f0e6d4 100%);
+  box-shadow:
+    0 0 0 1px rgba(224, 188, 124, 0.55),
+    0 0 0 5px rgba(224, 188, 124, 0.12),
+    0 18px 44px -18px rgba(0, 0, 0, 0.9);
 }
 
 .scroll-thin {

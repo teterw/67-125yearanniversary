@@ -8,7 +8,7 @@ import type { CountMode } from "./storage";
  * watch which one is on top. Every change of the top hand is a swap; a full
  * six-seven is two swaps (up on "six", back on "seven").
  *
- * Three things keep that honest across real conditions:
+ * Several things keep that honest across real conditions:
  *
  *  - every threshold is measured in **palm lengths**, not frame height, so the
  *    same settings work whether you are at the keyboard or across the room;
@@ -21,10 +21,33 @@ import type { CountMode } from "./storage";
  * walking past — `selectPair` keeps the pair nearest the camera, since apparent
  * hand size is a direct proxy for distance.
  *
+ * ## Surviving a slow camera
+ *
+ * A 30 fps webcam looking at a fast six-seven gets three or four samples of each
+ * half-swing, and the ones taken mid-flight are motion-blurred badly enough that
+ * the model loses a hand outright. Four mechanisms keep the count honest when
+ * that happens, all gated behind `adaptive`:
+ *
+ *  - **Auto-gain.** The travel threshold follows the swing the player is
+ *    actually producing (`AUTO_GAIN` times the recent peak), floored at a
+ *    fraction of the Travel setting. Sparse sampling rarely catches the true
+ *    peak of a swing, so a fixed threshold quietly stops being reachable as the
+ *    frame rate drops; one derived from what was measured does not.
+ *  - **One-hand fallback.** The motion is antisymmetric about a centre line, so
+ *    a single visible hand carries the whole signal. When blur takes one hand
+ *    out, the other is mirrored about the tracked centre and counting continues.
+ *  - **Speed-aware smoothing.** An EMA attenuates anything oscillating near its
+ *    own time constant, so smoothing sized for jitter can halve the very swing
+ *    being thresholded. The constant is capped against the player's tempo.
+ *  - **Sub-frame crossing times.** Swaps are timestamped where the signal
+ *    actually crossed between two samples, not at the frame that noticed. At
+ *    30 fps that is worth up to 33 ms per rep, on the tempo estimate and on the
+ *    finishing time alike.
+ *
  * On top of that, `prediction` keeps the count on the beat. Once a steady tempo
  * is established, a swap that is overdue while the camera has nothing useful to
  * say — hands out of frame, or the signal sitting in the dead zone — is counted
- * anyway. Motion blur and dropped frames stop showing up as missed reps.
+ * anyway.
  */
 
 export interface DetectorConfig {
@@ -36,6 +59,8 @@ export interface DetectorConfig {
   smoothing: number;
   /** Fill in overdue swaps from the established tempo. */
   prediction: boolean;
+  /** Auto-gain, one-hand fallback and speed-aware smoothing. */
+  adaptive: boolean;
 }
 
 export type Side = "L" | "R";
@@ -44,12 +69,16 @@ export interface DetectorFrame {
   count: number;
   /** True on the frame a point was awarded. */
   scored: boolean;
+  /** When the scoring swap crossed, interpolated between samples. */
+  scoredAt: number;
   /** Which hand is currently on top, or null before the first lock-on. */
   side: Side | null;
-  /** 0..1 progress through the current six-seven (cycle mode only). */
+  /** Mid-way through a six-seven — one swap landed, one to go (cycle mode). */
   halfway: boolean;
   /** Baselined separation in palm lengths; positive means the right hand is up. */
   signal: number;
+  /** Separation currently required to flip sides — auto-gain moves this. */
+  threshold: number;
   handsVisible: number;
   /** The hands actually being counted, after the closest-pair filter. */
   tracked: HandObservation[];
@@ -57,12 +86,18 @@ export interface DetectorFrame {
   predicted: boolean;
   /** A usable tempo is established, so prediction can step in if needed. */
   onBeat: boolean;
+  /** Counting from one hand, with its partner mirrored about the centre line. */
+  solo: boolean;
+  /** Measured detection rate, in frames per second. */
+  fps: number;
+  /** 0..1 — how well the camera is keeping up with the motion. */
+  quality: number;
 }
 
 export type Anchors = { left: HandObservation; right: HandObservation } | null;
 
 export interface HandObservation {
-  /** Index back into the landmark array this came from. */
+  /** Index back into the landmark array this came from. -1 when synthesized. */
   index: number;
   x: number;
   y: number;
@@ -72,19 +107,25 @@ export interface HandObservation {
 
 /** Guards against a divide-by-zero when a hand is detected almost edge-on. */
 const MIN_SCALE = 0.015;
-/** Hands gone this long: drop the baseline rather than invent a swap on return. */
-const STALE_MS = 700;
+/**
+ * Hands gone this long: forget which side we were on rather than read the next
+ * acquisition as a swap that never happened. Generous, because at speed both
+ * hands blur out together — they are moving fastest at exactly the same moment —
+ * and a blackout through a whole swing is normal, not a sign the player left.
+ */
+const STALE_MS = 1500;
 /** Beyond this gap, last frame's positions are too old to match against. */
 const REASSOCIATE_MS = 350;
 const BASELINE_TAU_MS = 2500;
+const CENTER_TAU_MS = 2500;
 const SMOOTHING_MAX_TAU_MS = 120;
 
 /** Swap intervals kept for the tempo estimate. */
 const TEMPO_WINDOW = 6;
 /** Below three intervals there is no tempo, only a coincidence. */
 const TEMPO_MIN_SAMPLES = 3;
-/** Spread across the window, relative to the median, before the tempo is junk. */
-const TEMPO_MAX_SPREAD = 0.6;
+/** Median absolute deviation, over the median, past which the tempo is junk. */
+const TEMPO_MAX_SPREAD = 0.35;
 /** Gaps outside this band aren't part of a rhythm. */
 const TEMPO_MIN_MS = 60;
 const TEMPO_MAX_MS = 2000;
@@ -92,6 +133,22 @@ const TEMPO_MAX_MS = 2000;
 const PREDICT_GRACE = 0.35;
 /** Consecutive predictions allowed before real evidence is required again. */
 const MAX_PREDICTED_RUN = 2;
+
+/** Fraction of the measured swing that has to be travelled to call a swap. */
+const AUTO_GAIN = 0.45;
+/** Floor under the auto-gained threshold, as a fraction of the Travel setting. */
+const AUTO_MIN = 0.4;
+/** Weight of each new half-swing in the running amplitude estimate. */
+const AMPLITUDE_ALPHA = 0.35;
+/** Smoothing time constant, capped at this fraction of a half-cycle. */
+const SMOOTHING_CYCLE_FRAC = 0.2;
+/** How long the mirrored partner stays usable after the pair was last seen. */
+const SOLO_MS = 1200;
+/** Samples per half-swing at which tracking is considered comfortable. */
+const QUALITY_SAMPLES = 5;
+
+/** How much better a re-labelling must look before the hands are re-labelled. */
+const RELABEL_MARGIN = 0.7;
 
 /** How hard a depth mismatch counts against a pair (one person, one distance). */
 const SIZE_MISMATCH_PENALTY = 0.5;
@@ -105,11 +162,17 @@ function emaWeight(dt: number, tau: number) {
   return tau <= 0 ? 1 : 1 - Math.exp(-dt / tau);
 }
 
+function clamp(n: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, n));
+}
+
 export class SixtySevenDetector {
   private config: DetectorConfig;
   private yLeft: number | null = null;
   private yRight: number | null = null;
   private baseline: number | null = null;
+  /** Slow mean of the two palm heights — the line the hands pivot around. */
+  private center: number | null = null;
   private prevLeft: HandObservation | null = null;
   private prevRight: HandObservation | null = null;
   private side: Side | null = null;
@@ -117,13 +180,22 @@ export class SixtySevenDetector {
   private lastSwapAt = 0;
   private lastFrameAt = 0;
   private lastSeenAt = 0;
+  /** Last frame both hands were genuinely detected — what solo mode leans on. */
+  private lastPairAt = 0;
   private signal = 0;
+  private prevSignal: number | null = null;
+  private prevSignalAt = 0;
   private tracked: HandObservation[] = [];
   /** Intervals between recent camera-confirmed swaps, for the tempo estimate. */
   private intervals: number[] = [];
   private predictedRun = 0;
   /** Timestamps of awarded points, for the live and peak rate readouts. */
   private hits: number[] = [];
+  /** Largest excursion seen on the current side, feeding the amplitude estimate. */
+  private peak = 0;
+  /** Running estimate of how far the player's swing actually travels. */
+  private amplitude: number | null = null;
+  private fps = 0;
 
   count = 0;
 
@@ -143,93 +215,216 @@ export class SixtySevenDetector {
     this.lastFrameAt = 0;
     this.lastSeenAt = 0;
     this.hits = [];
+    this.baseline = null;
+    this.center = null;
+    this.amplitude = null;
+    this.fps = 0;
     this.count = 0;
   }
 
-  /** Drops tracking state but keeps the score. */
+  /**
+   * Drops tracking state but keeps the score — and keeps `baseline`/`center`,
+   * which describe how the player is standing rather than where they are in a
+   * rep. Re-deriving those from the first frame after a blackout was the worst
+   * bug in here: that frame lands mid-swing, so an extreme became "neutral" and
+   * counting died for the two and a half seconds the baseline took to recover.
+   */
   private forget() {
     this.yLeft = null;
     this.yRight = null;
-    this.baseline = null;
     this.prevLeft = null;
     this.prevRight = null;
     this.side = null;
     this.swaps = 0;
     this.signal = 0;
+    this.prevSignal = null;
+    this.prevSignalAt = 0;
     this.predictedRun = 0;
+    this.peak = 0;
+    this.lastPairAt = 0;
     this.tracked = [];
   }
 
   update(observations: HandObservation[], now: number): DetectorFrame {
     const dt = this.lastFrameAt === 0 ? 16 : Math.min(250, now - this.lastFrameAt);
     this.lastFrameAt = now;
+    const instant = 1000 / dt;
+    this.fps = this.fps === 0 ? instant : this.fps + emaWeight(dt, 1000) * (instant - this.fps);
 
     // Ignore everyone else in shot before deciding anything.
     const pair = selectPair(observations, this.anchors(now));
     this.tracked = pair;
 
-    if (pair.length < 2) {
+    let left: HandObservation | null = null;
+    let right: HandObservation | null = null;
+    let solo = false;
+
+    if (pair.length >= 2) {
+      [left, right] = this.associate(pair, now);
+      this.lastSeenAt = now;
+      this.lastPairAt = now;
+      // The centre line only ever comes from a real pair, so a long one-handed
+      // stretch can't drift the very estimate it depends on.
+      const mid = (left.y + right.y) / 2;
+      const ck = emaWeight(dt, CENTER_TAU_MS);
+      this.center = this.center === null ? mid : this.center + ck * (mid - this.center);
+    } else if (pair.length === 1 && this.canGoSolo(now)) {
+      // One hand blurred out. The gesture is antisymmetric about the centre
+      // line, so the hand still in frame carries the whole signal on its own —
+      // mirror it and keep counting rather than stalling until both come back.
+      const seen = pair[0];
+      const isLeft = xGap(seen, this.prevLeft!) <= xGap(seen, this.prevRight!);
+      const partner: HandObservation = {
+        index: -1,
+        x: (isLeft ? this.prevRight! : this.prevLeft!).x,
+        y: 2 * this.center! - seen.y,
+        scale: seen.scale,
+      };
+      left = isLeft ? seen : partner;
+      right = isLeft ? partner : seen;
+      this.lastSeenAt = now;
+      solo = true;
+    }
+
+    if (left === null || right === null) {
       // A hand blinking out mid-rep shouldn't cost the rep, but a long absence
       // means the next reading is unrelated to the last one.
       if (this.lastSeenAt > 0 && now - this.lastSeenAt > STALE_MS) this.forget();
       const guess = this.predict(now);
       this.glide(dt);
-      return this.frame(guess.scored, pair.length, guess.swapped);
+      return this.frame(guess.scored, pair.length, guess.swapped, false, guess.at);
     }
 
-    const [left, right] = this.associate(pair, now);
-    this.lastSeenAt = now;
     this.prevLeft = left;
     this.prevRight = right;
 
     const scale = Math.max(MIN_SCALE, (left.scale + right.scale) / 2);
-    const k = emaWeight(dt, this.config.smoothing * SMOOTHING_MAX_TAU_MS);
+    const k = emaWeight(dt, this.smoothingTau());
     this.yLeft = this.yLeft === null ? left.y : this.yLeft + k * (left.y - this.yLeft);
     this.yRight = this.yRight === null ? right.y : this.yRight + k * (right.y - this.yRight);
 
     // Positive = the right-hand-side hand is higher (y grows downward).
     const raw = (this.yLeft - this.yRight) / scale;
-    const bk = emaWeight(dt, BASELINE_TAU_MS);
-    this.baseline = this.baseline === null ? raw : this.baseline + bk * (raw - this.baseline);
+    // Neutral is hands level, not wherever they happened to be on the first
+    // frame the camera resolved — mid-rep, that frame is an extreme.
+    if (this.baseline === null) this.baseline = 0;
+    this.baseline += emaWeight(dt, BASELINE_TAU_MS) * (raw - this.baseline);
     this.signal = raw - this.baseline;
 
-    const { sensitivity, cooldownMs, countMode } = this.config;
+    const { cooldownMs, countMode } = this.config;
+    const threshold = this.threshold();
+
+    // Track how far this half-swing actually got, so auto-gain has something to
+    // gain against.
+    if (this.side === "R" && this.signal > 0) this.peak = Math.max(this.peak, this.signal);
+    else if (this.side === "L" && this.signal < 0) this.peak = Math.max(this.peak, -this.signal);
+
     let next: Side | null = this.side;
-    if (this.signal > sensitivity) next = "R";
-    else if (this.signal < -sensitivity) next = "L";
+    if (this.signal > threshold) next = "R";
+    else if (this.signal < -threshold) next = "L";
 
     let scored = false;
     let predicted = false;
+    let scoredAt = now;
 
     if (next !== null && next !== this.side) {
+      const crossedAt = this.crossingTime(now, next === "R" ? threshold : -threshold);
       if (this.side === null) {
         // First lock-on establishes which side we started on — no point yet.
         this.side = next;
-      } else if (now - this.lastSwapAt >= cooldownMs) {
-        this.noteTempo(now);
+        this.peak = 0;
+      } else if (crossedAt - this.lastSwapAt >= cooldownMs) {
+        this.noteAmplitude();
+        this.noteTempo(crossedAt);
         this.side = next;
-        this.lastSwapAt = now;
+        this.lastSwapAt = crossedAt;
         this.swaps += 1;
         if (countMode === "swap" || this.swaps % 2 === 0) {
           this.count += 1;
-          this.hits.push(now);
+          this.hits.push(crossedAt);
           scored = true;
+          scoredAt = crossedAt;
         }
       }
-    } else if (Math.abs(this.signal) < sensitivity) {
+    } else if (Math.abs(this.signal) < threshold) {
       // The hands are mid-flight and the camera can't call it. If a swap is
       // overdue against the established tempo, the rhythm calls it instead.
       const guess = this.predict(now);
       scored = guess.scored;
       predicted = guess.swapped;
+      scoredAt = guess.at;
     }
 
-    return this.frame(scored, 2, predicted);
+    this.prevSignal = this.signal;
+    this.prevSignalAt = now;
+
+    return this.frame(scored, solo ? 1 : 2, predicted, solo, scoredAt);
+  }
+
+  /** Whether the mirrored-partner trick has everything it needs right now. */
+  private canGoSolo(now: number) {
+    return (
+      this.config.adaptive &&
+      this.center !== null &&
+      this.prevLeft !== null &&
+      this.prevRight !== null &&
+      this.lastPairAt > 0 &&
+      now - this.lastPairAt <= SOLO_MS
+    );
+  }
+
+  /**
+   * Separation required to flip sides. With auto-gain off this is exactly the
+   * Travel setting; with it on the setting becomes a ceiling and the working
+   * threshold follows the swing the camera is actually resolving — which is
+   * what keeps a slow feed from quietly falling below the bar on fast reps.
+   */
+  private threshold() {
+    const { sensitivity, adaptive } = this.config;
+    if (!adaptive || this.amplitude === null) return sensitivity;
+    return clamp(AUTO_GAIN * this.amplitude, sensitivity * AUTO_MIN, sensitivity);
+  }
+
+  /**
+   * Smoothing time constant. An EMA attenuates anything oscillating near its own
+   * time constant, so smoothing sized for landmark jitter shrinks the very
+   * signal being thresholded once reps get fast. Cap it against the tempo.
+   */
+  private smoothingTau() {
+    const tau = this.config.smoothing * SMOOTHING_MAX_TAU_MS;
+    if (!this.config.adaptive) return tau;
+    const period = this.period;
+    return period === null ? tau : Math.min(tau, period * SMOOTHING_CYCLE_FRAC);
+  }
+
+  /**
+   * Where the signal crossed `level`, somewhere between the previous sample and
+   * this one. The frame that notices a swap can be most of a frame late, which
+   * lands on the tempo estimate and on the finishing time alike.
+   */
+  private crossingTime(now: number, level: number) {
+    if (this.prevSignal === null || this.prevSignalAt === 0) return now;
+    const span = this.signal - this.prevSignal;
+    if (span === 0) return now;
+    const frac = (level - this.prevSignal) / span;
+    if (!Number.isFinite(frac)) return now;
+    return this.prevSignalAt + clamp(frac, 0, 1) * (now - this.prevSignalAt);
+  }
+
+  /** Folds the half-swing just completed into the amplitude estimate. */
+  private noteAmplitude() {
+    if (this.peak > 0) {
+      this.amplitude =
+        this.amplitude === null
+          ? this.peak
+          : this.amplitude + AMPLITUDE_ALPHA * (this.peak - this.amplitude);
+    }
+    this.peak = 0;
   }
 
   /** Records the gap since the last swap, so the tempo tracks the player. */
-  private noteTempo(now: number) {
-    const gap = now - this.lastSwapAt;
+  private noteTempo(at: number) {
+    const gap = at - this.lastSwapAt;
     if (this.lastSwapAt > 0 && gap >= TEMPO_MIN_MS && gap <= TEMPO_MAX_MS) {
       this.intervals.push(gap);
       if (this.intervals.length > TEMPO_WINDOW) this.intervals.shift();
@@ -240,14 +435,21 @@ export class SixtySevenDetector {
     this.predictedRun = 0;
   }
 
-  /** Median swap interval, or null when the tempo is too ragged to trust. */
+  /**
+   * Median swap interval, or null when the tempo is too ragged to trust.
+   *
+   * Spread is a median absolute deviation rather than the full range: on a slow
+   * camera one late frame stretches a single interval, and range would throw
+   * away an otherwise perfectly good tempo because of it.
+   */
   private get period(): number | null {
     if (this.intervals.length < TEMPO_MIN_SAMPLES) return null;
     const sorted = [...this.intervals].sort((a, b) => a - b);
     const median = sorted[sorted.length >> 1];
     if (median <= 0) return null;
-    const spread = (sorted[sorted.length - 1] - sorted[0]) / median;
-    return spread <= TEMPO_MAX_SPREAD ? median : null;
+    const deviations = sorted.map((v) => Math.abs(v - median)).sort((a, b) => a - b);
+    const mad = deviations[deviations.length >> 1];
+    return mad / median <= TEMPO_MAX_SPREAD ? median : null;
   }
 
   /**
@@ -255,8 +457,8 @@ export class SixtySevenDetector {
    * contradict it, and stops after `MAX_PREDICTED_RUN` in a row so a player who
    * simply stopped doesn't keep scoring.
    */
-  private predict(now: number): { swapped: boolean; scored: boolean } {
-    const still = { swapped: false, scored: false };
+  private predict(now: number): { swapped: boolean; scored: boolean; at: number } {
+    const still = { swapped: false, scored: false, at: now };
     if (!this.config.prediction || this.side === null) return still;
     if (this.predictedRun >= MAX_PREDICTED_RUN) return still;
 
@@ -272,13 +474,15 @@ export class SixtySevenDetector {
     this.lastSwapAt = due;
     this.predictedRun += 1;
     this.swaps += 1;
+    // A guessed swing is no evidence of how far the hands travelled.
+    this.peak = 0;
 
     if (this.config.countMode === "swap" || this.swaps % 2 === 0) {
       this.count += 1;
-      this.hits.push(now);
-      return { swapped: true, scored: true };
+      this.hits.push(due);
+      return { swapped: true, scored: true, at: due };
     }
-    return { swapped: true, scored: false };
+    return { swapped: true, scored: false, at: due };
   }
 
   /**
@@ -289,7 +493,7 @@ export class SixtySevenDetector {
   private glide(dt: number) {
     const period = this.period;
     if (this.side === null || period === null) return;
-    const target = (this.side === "R" ? 1 : -1) * this.config.sensitivity * 1.4;
+    const target = (this.side === "R" ? 1 : -1) * this.threshold() * 1.4;
     this.signal += emaWeight(dt, period / 2) * (target - this.signal);
   }
 
@@ -302,30 +506,59 @@ export class SixtySevenDetector {
 
   /**
    * Decides which detection is the left-hand-side hand. Matching against last
-   * frame's positions survives hands drifting close together, where sorting on
-   * x alone would flip the labels and invent a swap.
+   * frame's x survives hands drifting close together, where a bare left-to-right
+   * sort would flip the labels and invent a swap.
+   *
+   * Labels only matter in so far as they stay put — an assignment that is
+   * consistently "wrong" still yields the right signal, while one that flips
+   * inverts it — so re-labelling has to clear a margin, not just a tie.
    */
-  private associate(observations: HandObservation[], now: number): [HandObservation, HandObservation] {
+  private associate(
+    observations: HandObservation[],
+    now: number,
+  ): [HandObservation, HandObservation] {
     const [a, b] = observations;
     const anchors = this.anchors(now);
     if (!anchors) return a.x <= b.x ? [a, b] : [b, a];
 
-    const keep = dist2(a, anchors.left) + dist2(b, anchors.right);
-    const swapped = dist2(b, anchors.left) + dist2(a, anchors.right);
-    return keep <= swapped ? [a, b] : [b, a];
+    const keep = xGap(a, anchors.left) + xGap(b, anchors.right);
+    const swapped = xGap(b, anchors.left) + xGap(a, anchors.right);
+    return swapped < keep * RELABEL_MARGIN ? [b, a] : [a, b];
   }
 
-  private frame(scored: boolean, handsVisible: number, predicted = false): DetectorFrame {
+  /**
+   * How much of each half-swing the camera is resolving, 0..1. Frame rate alone
+   * doesn't say much — 30 fps is plenty for slow reps and thin for fast ones —
+   * so once a tempo exists this is samples per half-swing.
+   */
+  private get quality() {
+    const period = this.period;
+    if (period === null) return clamp(this.fps / 30, 0, 1);
+    return clamp((this.fps * period) / 1000 / QUALITY_SAMPLES, 0, 1);
+  }
+
+  private frame(
+    scored: boolean,
+    handsVisible: number,
+    predicted = false,
+    solo = false,
+    scoredAt = this.lastFrameAt,
+  ): DetectorFrame {
     return {
       count: this.count,
       scored,
+      scoredAt,
       side: this.side,
       halfway: this.config.countMode === "cycle" && this.swaps % 2 === 1,
       signal: this.signal,
+      threshold: this.threshold(),
       handsVisible,
       tracked: this.tracked,
       predicted,
       onBeat: this.config.prediction && this.period !== null,
+      solo,
+      fps: this.fps,
+      quality: this.quality,
     };
   }
 
@@ -337,7 +570,7 @@ export class SixtySevenDetector {
     return (recent / windowMs) * 60000;
   }
 
-  /** Best trailing rate seen during the round. */
+  /** Best trailing rate seen during the run. */
   peakRate(windowMs = 4000) {
     let peak = 0;
     let start = 0;
@@ -355,6 +588,22 @@ function dist2(p: { x: number; y: number }, q: { x: number; y: number }) {
 
 function gap(p: { x: number; y: number }, q: { x: number; y: number }) {
   return Math.sqrt(dist2(p, q));
+}
+
+/**
+ * Horizontal distance, which is the only honest evidence of *which hand is
+ * which*.
+ *
+ * Matching hands to last frame's positions in 2D looks reasonable and is
+ * catastrophically wrong for this gesture. The hands travel vertically and sit
+ * a fixed distance apart horizontally, so once the vertical travel exceeds the
+ * horizontal gap between the hands, a hand at the top of its swing is *closer*
+ * to where its partner was than to where it was itself. The labels swap, the
+ * signal inverts, and the count stops dead — the bigger the rep, the worse it
+ * gets. Which is exactly backwards from what a player expects.
+ */
+function xGap(p: { x: number }, q: { x: number }) {
+  return Math.abs(p.x - q.x);
 }
 
 /**

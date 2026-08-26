@@ -21,6 +21,7 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
   const [count, setCount] = useState(0);
   const [tilt, setTilt] = useState(0);
   const [hands, setHands] = useState(0);
+  const [stats, setStats] = useState({ fps: 0, quality: 0, inferenceMs: 0, inputScale: 1 });
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -33,6 +34,7 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
       countMode: settings.countMode,
       smoothing: settings.smoothing,
       prediction: settings.prediction,
+      adaptive: settings.adaptive,
     });
   }
 
@@ -43,6 +45,7 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
       countMode: settings.countMode,
       smoothing: settings.smoothing,
       prediction: settings.prediction,
+      adaptive: settings.adaptive,
     });
   }, [
     settings.sensitivity,
@@ -50,9 +53,10 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
     settings.countMode,
     settings.smoothing,
     settings.prediction,
+    settings.adaptive,
   ]);
 
-  const handleFrame = useCallback(({ hands: detected, time }: TrackerFrame) => {
+  const handleFrame = useCallback(({ hands: detected, time, inferenceMs, inputScale }: TrackerFrame) => {
     const detector = detectorRef.current;
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -83,15 +87,16 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
       );
     }
     if (frame.scored) setCount(frame.count);
-    if (time - hudAtRef.current > 80) {
+    if (time - hudAtRef.current > 120) {
       hudAtRef.current = time;
       setHands(frame.handsVisible);
-      const raw = Math.max(-1, Math.min(1, frame.signal / (settingsRef.current.sensitivity * 2)));
+      const raw = Math.max(-1, Math.min(1, frame.signal / (Math.max(0.01, frame.threshold) * 2)));
       setTilt(settingsRef.current.mirror ? -raw : raw);
+      setStats({ fps: frame.fps, quality: frame.quality, inferenceMs, inputScale });
     }
   }, []);
 
-  const { status, error, retry } = useHandTracking({
+  const { status, error, retry, delegate } = useHandTracking({
     deviceId: settings.deviceId,
     videoRef,
     onFrame: handleFrame,
@@ -115,14 +120,27 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
           className="pointer-events-none absolute inset-0 h-full w-full object-cover"
           style={{ transform: flip }}
         />
-        <div className="absolute left-3 top-3 rounded-lg bg-black/60 px-3 py-1.5 font-mono text-2xl font-black tabular-nums text-[#22e0ff]">
+        <div className="absolute left-3 top-3 rounded-lg bg-black/60 px-3 py-1.5 font-mono text-2xl font-black tabular-nums text-[#5d6fe3]">
           {count}
+        </div>
+        {/* The numbers that matter when the count feels wrong: how many looks
+            the camera is getting, and how much of each swing they cover. */}
+        <div className="absolute right-3 top-3 rounded-lg bg-black/60 px-3 py-1.5 text-right font-mono text-[11px] tabular-nums text-white/70">
+          <span style={{ color: stats.quality < 0.55 ? "#e0bc7c" : "#8f9cf0" }}>
+            {Math.round(stats.fps)} fps
+          </span>
+          <span className="text-white/35">
+            {" · "}
+            {stats.inferenceMs.toFixed(1)} ms
+            {stats.inputScale < 0.99 ? ` · ${Math.round(stats.inputScale * 100)}%` : ""}
+            {delegate ? ` · ${delegate}` : ""}
+          </span>
         </div>
         {status !== "ready" && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/70 px-4 text-center text-xs text-white/70">
             {status === "error" ? (
               <div>
-                <p className="text-[#ff2fb0]">{error}</p>
+                <p className="text-[#e4454f]">{error}</p>
                 <button
                   type="button"
                   onClick={retry}
@@ -142,7 +160,7 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
         <div className="relative h-2 overflow-hidden rounded-full bg-white/10">
           <div className="absolute inset-y-0 left-1/2 w-px bg-white/30" />
           <div
-            className="absolute inset-y-0 rounded-full bg-[#22e0ff] transition-[left,right] duration-75"
+            className="absolute inset-y-0 rounded-full bg-[#5d6fe3] transition-[left,right] duration-75"
             style={{
               left: tilt < 0 ? `${50 + tilt * 50}%` : "50%",
               right: tilt > 0 ? `${50 - tilt * 50}%` : "50%",
@@ -150,9 +168,13 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
           />
         </div>
         <p className="mt-2 text-xs text-white/45">
-          {hands < 2
+          {hands < 1
             ? "Show both hands to test."
-            : "Rock your hands — the bar swings, and the counter should tick once per six-seven."}
+            : stats.quality > 0 && stats.quality < 0.55
+              ? "The camera is getting few looks at each swing — more light, or a slightly slower tempo, buys back accuracy."
+              : delegate === "CPU"
+              ? "This browser wouldn't give up the GPU, so tracking is running on the CPU — several times slower. Try another browser, or turn off its fingerprinting/WebGL protection for this site."
+              : "Rock your hands — the bar swings, and the counter should tick once per move."}
         </p>
       </div>
 

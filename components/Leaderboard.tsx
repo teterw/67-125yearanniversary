@@ -1,8 +1,8 @@
 "use client";
 
-import type { ScoreEntry } from "@/lib/storage";
+import { formatTime, type ScoreEntry } from "@/lib/storage";
 
-const MEDALS = ["#ffd23f", "#cfd7e3", "#e08a4a"];
+const MEDALS = ["#e0bc7c", "#cfd7e3", "#e08a4a"];
 
 function formatDate(iso: string) {
   const d = new Date(iso);
@@ -24,7 +24,7 @@ export default function Leaderboard({
   entries,
   limit = 8,
   highlightId = null,
-  emptyLabel = "No runs yet — the board is yours to take.",
+  emptyLabel = "No times yet — the board is yours to take.",
   onRemove,
 }: Props) {
   const shown = entries.slice(0, limit);
@@ -43,7 +43,7 @@ export default function Leaderboard({
           <li
             key={entry.id}
             className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition ${
-              isMe ? "bg-[#22e0ff]/15 ring-1 ring-[#22e0ff]/60" : "bg-white/[0.04] hover:bg-white/[0.07]"
+              isMe ? "bg-[#5d6fe3]/15 ring-1 ring-[#5d6fe3]/60" : "bg-white/[0.04] hover:bg-white/[0.07]"
             }`}
           >
             <span
@@ -54,13 +54,13 @@ export default function Leaderboard({
             </span>
             <span className="min-w-0 flex-1 truncate font-medium">
               {entry.name}
-              {isMe && <span className="ml-2 text-[10px] uppercase tracking-widest text-[#22e0ff]">you</span>}
+              {isMe && <span className="ml-2 text-[10px] uppercase tracking-widest text-[#5d6fe3]">you</span>}
             </span>
             <span className="shrink-0 text-[11px] tabular-nums text-white/35">
-              {entry.roundSeconds}s · {formatDate(entry.date)}
+              {entry.target} · {formatDate(entry.date)}
             </span>
-            <span className="w-12 shrink-0 text-right font-mono text-base font-bold tabular-nums text-white">
-              {entry.score}
+            <span className="w-20 shrink-0 text-right font-mono text-base font-bold tabular-nums text-white">
+              {formatTime(entry.timeMs)}
             </span>
             {onRemove && (
               <button

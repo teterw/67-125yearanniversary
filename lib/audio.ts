@@ -41,9 +41,12 @@ export function blip(freq: number, durationMs = 90, gain = 0.12, type: Oscillato
   osc.stop(now + dur + 0.02);
 }
 
+/** Every 25th rep gets a fanfare — four of them stand between you and 125. */
+const MILESTONE_EVERY = 25;
+
 /** Rising two-tone on every count, so the rhythm is audible without looking. */
-export function countBlip(count: number) {
-  const milestone = count % 67 === 0;
+export function countBlip(count: number, target: number) {
+  const milestone = count % MILESTONE_EVERY === 0 && count !== target;
   blip(milestone ? 880 : 620 + (count % 8) * 25, milestone ? 160 : 70, milestone ? 0.16 : 0.1);
   if (milestone) window.setTimeout(() => blip(1320, 200, 0.14), 90);
 }
