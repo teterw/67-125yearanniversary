@@ -64,10 +64,10 @@ export default function GameScreen({
   const unit = unitLabel(countMode);
 
   return (
-    <div className="pointer-events-none flex h-full w-full flex-col justify-between p-5 sm:p-8">
+    <div className="pointer-events-none thai flex h-full w-full flex-col justify-between p-5 sm:p-8">
       <div className="flex items-start justify-between gap-4">
         <div className="panel rounded-2xl px-4 py-2.5">
-          <p className="text-[10px] uppercase tracking-[0.28em] text-white/45">Time</p>
+          <p className="text-xs leading-relaxed text-white/50">เวลา</p>
           <p
             className={`font-mono text-3xl font-black tabular-nums leading-none ${
               closing ? "text-[#e0bc7c]" : "text-white"
@@ -78,12 +78,12 @@ export default function GameScreen({
         </div>
 
         <div className="panel rounded-2xl px-4 py-2.5 text-right">
-          <p className="text-[10px] uppercase tracking-[0.28em] text-white/45">Pace</p>
+          <p className="text-xs leading-relaxed text-white/50">จังหวะ</p>
           <p className="font-mono text-3xl font-black tabular-nums leading-none text-[#5d6fe3]">
             {Math.round(rate)}
           </p>
-          <p className="text-[10px] text-white/35">
-            {projected ? `finish ~${formatTime(projected)}` : `${unit} / min`}
+          <p className="text-[11px] leading-relaxed text-white/40">
+            {projected ? `คาดว่าจบ ~${formatTime(projected)}` : `${unit} / นาที`}
           </p>
         </div>
       </div>
@@ -107,23 +107,23 @@ export default function GameScreen({
         <p className="relative -mt-2 font-mono text-sm font-bold tracking-[0.3em] text-white/55">
           / {target}
         </p>
-        <p className="relative mt-1 text-xs font-bold uppercase tracking-[0.4em] text-white/45">
-          {closing && remaining > 0 ? `${remaining} to go` : unit}
+        <p className="relative mt-1 text-sm font-semibold leading-relaxed text-white/50">
+          {closing && remaining > 0 ? `อีก ${remaining} ${unit}` : unit}
         </p>
 
         {handsVisible < 2 && !solo && (
-          <p className="relative mt-5 rounded-full bg-[#e4454f]/30 px-4 py-1.5 text-sm font-semibold text-[#f5969c] ring-1 ring-[#e4454f]/40">
-            Show both hands
+          <p className="relative mt-5 rounded-full bg-[#e4454f]/30 px-4 py-1.5 text-sm font-semibold leading-relaxed text-[#f5969c] ring-1 ring-[#e4454f]/40">
+            ยกมือทั้งสองข้างให้กล้องเห็น
           </p>
         )}
         {solo && (
-          <p className="relative mt-5 rounded-full bg-black/50 px-4 py-1.5 text-sm font-semibold text-[#5d6fe3]">
-            One hand — still counting
+          <p className="relative mt-5 rounded-full bg-black/50 px-4 py-1.5 text-sm font-semibold leading-relaxed text-[#5d6fe3]">
+            เห็นมือข้างเดียว — ยังนับต่อ
           </p>
         )}
         {handsVisible >= 2 && halfway && (
-          <p className="relative mt-5 rounded-full bg-black/50 px-4 py-1.5 text-sm font-semibold text-[#e0bc7c]">
-            …and back
+          <p className="relative mt-5 rounded-full bg-black/50 px-4 py-1.5 text-sm font-semibold leading-relaxed text-[#e0bc7c]">
+            …แล้วสลับกลับ
           </p>
         )}
       </div>
@@ -142,9 +142,9 @@ export default function GameScreen({
               }}
             />
           </div>
-          <div className="mt-1.5 flex justify-between text-[10px] uppercase tracking-[0.25em] text-white/35">
-            <span className={shown === "L" ? "text-[#5d6fe3]" : ""}>left up</span>
-            <span className={shown === "R" ? "text-[#e4454f]" : ""}>right up</span>
+          <div className="mt-1.5 flex justify-between text-[11px] leading-relaxed text-white/40">
+            <span className={shown === "L" ? "text-[#5d6fe3]" : ""}>มือซ้ายขึ้น</span>
+            <span className={shown === "R" ? "text-[#e4454f]" : ""}>มือขวาขึ้น</span>
           </div>
         </div>
 
@@ -170,16 +170,16 @@ export default function GameScreen({
 
         <div className="flex items-center justify-center gap-3">
           {quality > 0 && quality < THIN && (
-            <span className="rounded-full bg-[#e0bc7c]/15 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-[#e0bc7c] ring-1 ring-[#e0bc7c]/30">
-              {Math.round(fps)} fps · thin tracking
+            <span className="rounded-full bg-[#e0bc7c]/15 px-3 py-1 text-[11px] font-semibold leading-relaxed text-[#e0bc7c] ring-1 ring-[#e0bc7c]/30">
+              {Math.round(fps)} fps · กล้องตามไม่ค่อยทัน
             </span>
           )}
           <button
             type="button"
             onClick={onAbort}
-            className="pointer-events-auto rounded-full border border-white/15 px-5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/55 transition hover:border-white/35 hover:text-white"
+            className="pointer-events-auto rounded-full border border-white/15 px-5 py-1.5 text-xs font-semibold leading-relaxed text-white/55 transition hover:border-white/35 hover:text-white"
           >
-            End run
+            จบรอบ
           </button>
         </div>
       </div>

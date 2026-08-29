@@ -44,9 +44,7 @@ export function AnniversaryMark({
 export function Contributors({ className = "" }: { className?: string }) {
   return (
     <div className={`flex flex-wrap items-center justify-center gap-x-5 gap-y-3 ${className}`}>
-      <span className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/30">
-        presented by
-      </span>
+      <span className="text-xs font-medium text-white/35">สนับสนุนโดย</span>
       <Image
         src="/logos/act-1961.png"
         alt="ACT 1961"

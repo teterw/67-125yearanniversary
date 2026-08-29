@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SixtySevenDetector, observeHands } from "@/lib/detector";
+import { SixtySevenDetector, observePose } from "@/lib/detector";
 import { drawMarkers } from "@/lib/draw";
 import { useHandTracking, type TrackerFrame } from "@/lib/useHandTracking";
 import type { Settings } from "@/lib/storage";
@@ -56,14 +56,14 @@ export default function CameraPreview({ settings }: { settings: Settings }) {
     settings.adaptive,
   ]);
 
-  const handleFrame = useCallback(({ hands: detected, time, inferenceMs, inputScale }: TrackerFrame) => {
+  const handleFrame = useCallback(({ poses, time, inferenceMs, inputScale }: TrackerFrame) => {
     const detector = detectorRef.current;
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!detector) return;
 
     const aspect = video && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
-    const observed = observeHands(detected, aspect);
+    const observed = observePose(poses[0], aspect);
     const frame = detector.update(observed, time);
 
     if (canvas && video) {

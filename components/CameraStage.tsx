@@ -15,9 +15,9 @@ interface Props {
 }
 
 const STATUS_LABEL: Record<TrackerStatus, string> = {
-  idle: "Waking up…",
-  starting: "Asking for the camera…",
-  loading: "Loading hand tracking…",
+  idle: "กำลังเริ่มต้น…",
+  starting: "กำลังขออนุญาตใช้กล้อง…",
+  loading: "กำลังโหลดระบบติดตามท่าทาง…",
   ready: "",
   error: "",
 };
@@ -80,14 +80,14 @@ export default function CameraStage({
       {status === "error" && (
         <div className="absolute inset-0 flex items-center justify-center p-6">
           <div className="panel max-w-sm rounded-2xl p-6 text-center">
-            <p className="text-lg font-semibold text-[#e4454f]">Camera unavailable</p>
-            <p className="mt-2 text-sm leading-relaxed text-white/65">{error}</p>
+            <p className="text-lg font-semibold leading-snug text-[#e4454f]">ใช้กล้องไม่ได้</p>
+            <p className="mt-2 text-sm leading-[1.8] text-white/65">{error}</p>
             <button
               type="button"
               onClick={onRetry}
               className="mt-5 rounded-full bg-white/10 px-5 py-2 text-sm font-semibold transition hover:bg-white/20"
             >
-              Try again
+              ลองอีกครั้ง
             </button>
           </div>
         </div>

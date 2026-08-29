@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-noto-sans-thai);
   --font-mono: var(--font-geist-mono);
   /* Taken from the 125th anniversary mark: royal #243084, crimson #c02424,
      gold #c0a878 — lightened only as far as legibility on a dark stage needs. */
@@ -22,9 +22,27 @@ body {
     radial-gradient(120% 80% at 50% -10%, #131a3a 0%, transparent 60%),
     var(--color-ink);
   color: #f2f3fb;
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-family: var(--font-noto-sans-thai), "Noto Sans Thai", "Sukhumvit Set", "Thonburi", system-ui, sans-serif;
+  /*
+   * Thai stacks vowels and tone marks above and below the consonant line, so
+   * it needs roomier leading than Latin — 1.7 for running text keeps the marks
+   * on one line from touching the descenders of the line above. Tight
+   * headings override this locally but never go below 1.25.
+   */
+  line-height: 1.7;
   overflow: hidden;
   overscroll-behavior: none;
+}
+
+/*
+ * Letter-spacing is a Latin habit: on Thai it drifts combining marks away from
+ * their base consonant. Big numerals opt back in with .num-tight.
+ */
+.thai {
+  letter-spacing: 0;
+}
+.num-tight {
+  letter-spacing: -0.04em;
 }
 
 /* Gilt plate behind the big numerals and titles. */

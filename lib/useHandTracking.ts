@@ -1,14 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import type { HandLandmarker, NormalizedLandmark } from "@mediapipe/tasks-vision";
+import type { NormalizedLandmark, PoseLandmarker } from "@mediapipe/tasks-vision";
 
 export type TrackerStatus = "idle" | "starting" | "loading" | "ready" | "error";
 
 export type Delegate = "GPU" | "CPU";
 
 export interface TrackerFrame {
-  hands: NormalizedLandmark[][];
+  /** One 33-point body per detected person (we ask for one). */
+  poses: NormalizedLandmark[][];
   /** performance.now() of this frame. */
   time: number;
   /** Measured detection rate. */
@@ -28,7 +29,7 @@ interface Options {
 }
 
 const WASM_PATH = "/mediapipe/wasm";
-const MODEL_PATH = "/mediapipe/models/hand_landmarker.task";
+const MODEL_PATH = "/mediapipe/models/pose_landmarker_lite.task";
 
 /**
  * Capture is deliberately not maxed out. Motion blur, not resolution, is what
@@ -62,14 +63,14 @@ function describeCameraError(err: unknown): string {
   switch (name) {
     case "NotAllowedError":
     case "SecurityError":
-      return "Camera access was blocked. Allow it in your browser's site settings, then reload.";
+      return "กล้องถูกปิดกั้น กรุณาอนุญาตการใช้กล้องในตั้งค่าของเบราว์เซอร์ แล้วโหลดหน้าใหม่";
     case "NotFoundError":
     case "OverconstrainedError":
-      return "No camera found. Plug one in (or pick a different device in Settings) and reload.";
+      return "ไม่พบกล้อง กรุณาเสียบกล้อง (หรือเลือกอุปกรณ์อื่นในตั้งค่า) แล้วโหลดหน้าใหม่";
     case "NotReadableError":
-      return "The camera is already in use by another app. Close it and reload.";
+      return "กล้องกำลังถูกใช้งานโดยแอปอื่น กรุณาปิดแอปนั้นแล้วโหลดหน้าใหม่";
     default:
-      return err instanceof Error ? err.message : "Could not start the camera.";
+      return err instanceof Error ? err.message : "เปิดกล้องไม่สำเร็จ";
   }
 }
 
@@ -80,14 +81,14 @@ function describeCameraError(err: unknown): string {
  *
  * Two things here exist purely to keep the detection rate up on modest hardware:
  * the frame handed to MediaPipe is downscaled when inference starts eating the
- * frame budget (the model works from a 192px crop, so a 960px upload is mostly
+ * frame budget (the model works from a 256px crop, so a 960px upload is mostly
  * wasted bandwidth), and a feed that still can't reach 24 fps gets one attempt
  * at a lower capture resolution. Both are reported back on every frame so the UI
  * can say so out loud instead of just counting badly.
  */
 export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
   const onFrameRef = useRef(onFrame);
-  const landmarkerRef = useRef<HandLandmarker | null>(null);
+  const landmarkerRef = useRef<PoseLandmarker | null>(null);
   const rafRef = useRef<number | null>(null);
   const vfcRef = useRef<number | null>(null);
   const lastVideoTimeRef = useRef(-1);
@@ -152,28 +153,25 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
       setStatus("loading");
 
       try {
-        const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
+        const { FilesetResolver, PoseLandmarker } = await import("@mediapipe/tasks-vision");
         const fileset = await FilesetResolver.forVisionTasks(WASM_PATH);
         const base = {
-          // Two, not four. In VIDEO mode MediaPipe re-runs the palm detector
-          // whenever it is tracking fewer hands than this — so asking for four
-          // when two are present pays for full detection on *every* frame, for
-          // the sole benefit of letting `selectPair` discard bystanders. That
-          // trade is backwards on a machine that is already struggling: the
-          // frames it costs are the frames a fast rep needs.
-          numHands: 2,
+          // Pose, not hands. The palm detector loses a motion-blurred hand
+          // outright, and every lost hand is a lost sample. The body model
+          // keeps a wrist estimate through blur because it anchors on the
+          // torso and arms, which barely move — so the wrists track a fast
+          // six-seven at the camera's full frame rate.
+          numPoses: 1,
           runningMode: "VIDEO" as const,
-          // Deliberately loose: the six-seven gesture moves fast enough to blur
-          // frames, and stricter thresholds drop a hand mid-rep. The detector
-          // can work from one hand, so a half-confident reading is worth having.
-          minHandDetectionConfidence: 0.2,
-          minHandPresenceConfidence: 0.2,
-          minTrackingConfidence: 0.2,
+          minPoseDetectionConfidence: 0.5,
+          minPosePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+          outputSegmentationMasks: false,
         };
-        let landmarker: HandLandmarker;
+        let landmarker: PoseLandmarker;
         let chosen: Delegate = "GPU";
         try {
-          landmarker = await HandLandmarker.createFromOptions(fileset, {
+          landmarker = await PoseLandmarker.createFromOptions(fileset, {
             baseOptions: { modelAssetPath: MODEL_PATH, delegate: "GPU" },
             ...base,
           });
@@ -182,7 +180,7 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
           // withhold it as a fingerprinting defence, which is worth being able
           // to see, since the CPU fallback is several times slower.
           chosen = "CPU";
-          landmarker = await HandLandmarker.createFromOptions(fileset, {
+          landmarker = await PoseLandmarker.createFromOptions(fileset, {
             baseOptions: { modelAssetPath: MODEL_PATH, delegate: "CPU" },
             ...base,
           });
@@ -197,7 +195,7 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
         setStatus("ready");
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not load the hand tracking model.");
+          setError(err instanceof Error ? err.message : "โหลดโมเดลติดตามท่าทางไม่สำเร็จ");
           setStatus("error");
         }
         return;
@@ -284,7 +282,7 @@ export function useHandTracking({ deviceId, videoRef, onFrame }: Options) {
           const took = performance.now() - time;
           inferenceMs = inferenceMs === 0 ? took : inferenceMs + 0.2 * (took - inferenceMs);
           onFrameRef.current({
-            hands: result.landmarks ?? [],
+            poses: result.landmarks ?? [],
             time,
             fps,
             inferenceMs,

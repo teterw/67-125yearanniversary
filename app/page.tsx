@@ -7,7 +7,7 @@ import GameScreen from "@/components/GameScreen";
 import ResultsScreen, { type RunResult } from "@/components/ResultsScreen";
 import {
   SixtySevenDetector,
-  observeHands,
+  observePose,
   selectPair,
   type HandObservation,
   type Side,
@@ -75,6 +75,8 @@ export default function Home() {
   const [run, setRun] = useState<RunResult | null>(null);
   const [boardBefore, setBoardBefore] = useState<ScoreEntry[]>([]);
   const [saved, setSaved] = useState<{ id: string; rank: number; board: ScoreEntry[] } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -127,14 +129,14 @@ export default function Home() {
 
   /* ------------------------------------------------------------ frame loop */
 
-  const handleFrame = useCallback(({ hands, time }: TrackerFrame) => {
+  const handleFrame = useCallback(({ poses, time }: TrackerFrame) => {
     const detector = detectorRef.current;
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!detector) return;
 
     const aspect = video && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
-    const observed = observeHands(hands, aspect);
+    const observed = observePose(poses[0], aspect);
     const paint = (tracked: HandObservation[]) => {
       if (canvas && video) drawMarkers(canvas, video, markersFor(observed, tracked));
     };
@@ -209,6 +211,7 @@ export default function Home() {
       });
       setBoardBefore(loadLeaderboard());
       setSaved(null);
+      setSaveError(null);
       setHud(EMPTY_HUD);
       go("results");
       if (current.sound && completed) finishJingle();
@@ -301,21 +304,27 @@ export default function Home() {
 
   const handleSave = useCallback(
     (name: string) => {
-      if (!run || !run.completed) return;
-      const result = saveScore({
+      if (!run || !run.completed || saving) return;
+      setSaving(true);
+      setSaveError(null);
+      const trimmed = name.trim().slice(0, 20);
+      if (trimmed && trimmed !== settingsRef.current.playerName) {
+        saveSettings({ ...settingsRef.current, playerName: trimmed });
+      }
+      saveScore({
         name,
         timeMs: run.timeMs,
         target: run.target,
         peakRate: run.peakRate,
         countMode: run.countMode,
-      });
-      setSaved({ id: result.entry.id, rank: result.rank, board: result.board });
-      const trimmed = name.trim().slice(0, 20);
-      if (trimmed && trimmed !== settingsRef.current.playerName) {
-        saveSettings({ ...settingsRef.current, playerName: trimmed });
-      }
+      })
+        .then((result) => setSaved({ id: result.entry.id, rank: result.rank, board: result.board }))
+        .catch((err: unknown) => {
+          setSaveError(err instanceof Error ? err.message : "บันทึกไม่สำเร็จ");
+        })
+        .finally(() => setSaving(false));
     },
-    [run],
+    [run, saving],
   );
 
   /* ----------------------------------------------------------------- render */
@@ -351,8 +360,8 @@ export default function Home() {
             >
               {countdown > 0 ? countdown : "67!"}
             </p>
-            <p className="text-sm font-bold uppercase tracking-[0.4em] text-white/60">
-              palms up · both hands
+            <p className="text-base font-semibold leading-relaxed text-white/60">
+              หงายฝ่ามือ · ยกมือทั้งสองข้างให้กล้องเห็น
             </p>
           </div>
         )}
@@ -384,6 +393,8 @@ export default function Home() {
             board={boardBefore}
             defaultName={settings.playerName}
             saved={saved}
+            saving={saving}
+            saveError={saveError}
             onSave={handleSave}
             onPlayAgain={startGame}
             onMenu={backToMenu}

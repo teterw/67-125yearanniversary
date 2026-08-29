@@ -58,7 +58,7 @@ export interface ScoreEntry {
 export const DEFAULT_SETTINGS: Settings = {
   playerName: "",
   target: ANNIVERSARY_TARGET,
-  sensitivity: 0.32,
+  sensitivity: 0.4,
   smoothing: 0.35,
   countMode: "swap",
   mirror: true,
@@ -70,15 +70,16 @@ export const DEFAULT_SETTINGS: Settings = {
   deviceId: null,
 };
 
-const SETTINGS_KEY = "sixtyseven.settings.v4";
-/** v3 and older kept a count mode that is no longer the one we ship. */
+const SETTINGS_KEY = "sixtyseven.settings.v5";
+/** v4 measured travel in hand-landmarker palm lengths; v3 and older kept a count mode that is no longer the one we ship. */
 const LEGACY_SETTINGS_KEYS = [
+  "sixtyseven.settings.v4",
   "sixtyseven.settings.v3",
   "sixtyseven.settings.v2",
   "sixtyseven.settings.v1",
 ];
-/** v1 held counts scored in a fixed round — not comparable with a race time. */
-const BOARD_KEY = "sixtyseven.leaderboard.v2";
+/** v3 is a mirror of the server board; v2 and older were local-only. */
+const BOARD_KEY = "sixtyseven.leaderboard.v3";
 const MAX_ENTRIES = 100;
 
 export const SETTINGS_EVENT = "sixtyseven:settings";
@@ -120,7 +121,9 @@ export function loadSettings(): Settings {
   const migrating = from !== SETTINGS_KEY;
   // A v1 record measured sensitivity in frame heights; reusing that number as a
   // palm-length threshold would give a wildly twitchy bar, so it starts fresh.
-  const legacySensitivity = from === "sixtyseven.settings.v1";
+  // v4 and older tuned it against the hand model's palm length; the torso-
+  // derived unit is close but not identical, so a migrated record starts fresh.
+  const legacySensitivity = migrating;
   return {
     playerName:
       typeof stored.playerName === "string"
@@ -158,6 +161,14 @@ export function resetSettings(): Settings {
   return fresh;
 }
 
+/**
+ * The leaderboard lives in Neon (see `lib/db.ts`, `/api/scores`). This module
+ * keeps a localStorage mirror of the last board fetched so readers stay
+ * synchronous — `useLeaderboard` reads the mirror, and every network write
+ * refreshes it and fires `BOARD_EVENT`.
+ */
+
+/** Last board seen from the server. Empty until the first sync completes. */
 export function loadLeaderboard(): ScoreEntry[] {
   const stored = readJSON<ScoreEntry[]>(BOARD_KEY);
   if (!Array.isArray(stored)) return [];
@@ -172,34 +183,55 @@ function sortEntries(a: ScoreEntry, b: ScoreEntry) {
   return Date.parse(b.date) - Date.parse(a.date);
 }
 
+function mirrorBoard(board: ScoreEntry[]) {
+  writeJSON(BOARD_KEY, board.slice(0, MAX_ENTRIES), BOARD_EVENT);
+}
+
+async function request(method: "GET" | "POST" | "DELETE", path = "", body?: unknown) {
+  const res = await fetch(`/api/scores${path}`, {
+    method,
+    headers: body ? { "content-type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : `HTTP ${res.status}`);
+  return data;
+}
+
+/** Pulls the shared board down and refreshes every reader. */
+export async function syncLeaderboard(): Promise<ScoreEntry[]> {
+  const data = await request("GET");
+  const board = Array.isArray(data.board) ? (data.board as ScoreEntry[]) : [];
+  mirrorBoard(board);
+  return board;
+}
+
 export interface SaveResult {
   board: ScoreEntry[];
   rank: number;
   entry: ScoreEntry;
 }
 
-export function saveScore(entry: Omit<ScoreEntry, "id" | "date">): SaveResult {
-  const full: ScoreEntry = {
+export async function saveScore(entry: Omit<ScoreEntry, "id" | "date">): Promise<SaveResult> {
+  const data = await request("POST", "", {
     ...entry,
     name: entry.name.trim().slice(0, 20) || "ANON",
-    id:
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    date: new Date().toISOString(),
-  };
-  const board = [...loadLeaderboard(), full].sort(sortEntries).slice(0, MAX_ENTRIES);
-  writeJSON(BOARD_KEY, board, BOARD_EVENT);
-  return { board, rank: board.findIndex((e) => e.id === full.id) + 1, entry: full };
+  });
+  const board = data.board as ScoreEntry[];
+  mirrorBoard(board);
+  return { board, rank: Number(data.rank), entry: data.entry as ScoreEntry };
 }
 
-export function clearLeaderboard() {
-  writeJSON(BOARD_KEY, [], BOARD_EVENT);
+export async function clearLeaderboard() {
+  const data = await request("DELETE");
+  mirrorBoard((data.board as ScoreEntry[]) ?? []);
 }
 
-export function removeScore(id: string): ScoreEntry[] {
-  const board = loadLeaderboard().filter((e) => e.id !== id);
-  writeJSON(BOARD_KEY, board, BOARD_EVENT);
+export async function removeScore(id: string): Promise<ScoreEntry[]> {
+  const data = await request("DELETE", `?id=${encodeURIComponent(id)}`);
+  const board = (data.board as ScoreEntry[]) ?? [];
+  mirrorBoard(board);
   return board;
 }
 
@@ -210,7 +242,7 @@ export function projectedRank(board: ScoreEntry[], timeMs: number) {
 
 /** What one count is called — the swap default counts moves, not full six-sevens. */
 export function unitLabel(mode: CountMode) {
-  return mode === "swap" ? "moves" : "six-sevens";
+  return mode === "swap" ? "ครั้ง" : "รอบ 6-7";
 }
 
 /**

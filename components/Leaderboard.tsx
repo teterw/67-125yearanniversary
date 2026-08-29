@@ -8,7 +8,7 @@ function formatDate(iso: string) {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
     ? ""
-    : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    : d.toLocaleDateString("th-TH", { month: "short", day: "numeric" });
 }
 
 interface Props {
@@ -24,7 +24,7 @@ export default function Leaderboard({
   entries,
   limit = 8,
   highlightId = null,
-  emptyLabel = "No times yet — the board is yours to take.",
+  emptyLabel = "ยังไม่มีสถิติ — อันดับหนึ่งรอคุณอยู่",
   onRemove,
 }: Props) {
   const shown = entries.slice(0, limit);
@@ -54,7 +54,7 @@ export default function Leaderboard({
             </span>
             <span className="min-w-0 flex-1 truncate font-medium">
               {entry.name}
-              {isMe && <span className="ml-2 text-[10px] uppercase tracking-widest text-[#5d6fe3]">you</span>}
+              {isMe && <span className="ml-2 text-[11px] text-[#5d6fe3]">คุณ</span>}
             </span>
             <span className="shrink-0 text-[11px] tabular-nums text-white/35">
               {entry.target} · {formatDate(entry.date)}
@@ -66,7 +66,7 @@ export default function Leaderboard({
               <button
                 type="button"
                 onClick={() => onRemove(entry.id)}
-                aria-label={`Remove ${entry.name}'s score`}
+                aria-label={`ลบสถิติของ ${entry.name}`}
                 className="shrink-0 rounded-md px-1.5 text-white/30 transition hover:bg-red-500/20 hover:text-red-300"
               >
                 ×

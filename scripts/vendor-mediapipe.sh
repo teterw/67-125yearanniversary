@@ -8,7 +8,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 src="$root/node_modules/@mediapipe/tasks-vision/wasm"
 wasm="$root/public/mediapipe/wasm"
 models="$root/public/mediapipe/models"
-model_url="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+model_url="https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
 
 [ -d "$src" ] || { echo "Missing $src — run npm install first." >&2; exit 1; }
 
@@ -19,5 +19,5 @@ for f in vision_wasm_internal.js vision_wasm_internal.wasm \
 done
 echo "Copied wasm runtime -> public/mediapipe/wasm"
 
-curl -fsSL -o "$models/hand_landmarker.task" "$model_url"
-echo "Downloaded hand_landmarker.task -> public/mediapipe/models"
+curl -fsSL -o "$models/pose_landmarker_lite.task" "$model_url"
+echo "Downloaded pose_landmarker_lite.task -> public/mediapipe/models"

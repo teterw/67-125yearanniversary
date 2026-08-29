@@ -692,3 +692,77 @@ export function observeHands(
   });
   return out;
 }
+
+/* ------------------------------------------------------------------- pose */
+
+/** MediaPipe pose landmark indices. */
+const L_SHOULDER = 11;
+const R_SHOULDER = 12;
+const L_WRIST = 15;
+const R_WRIST = 16;
+const L_HIP = 23;
+const R_HIP = 24;
+
+/** A wrist the model is less sure about than this is treated as out of frame. */
+const WRIST_VISIBILITY = 0.45;
+/**
+ * A torso is about five palm lengths, so scaling the torso by this keeps every
+ * threshold in the palm-length units the settings were tuned in.
+ */
+const TORSO_TO_PALM = 0.2;
+/** Fallback when the hips are out of shot: shoulder width ≈ 0.55 torso. */
+const SHOULDERS_TO_TORSO = 1.8;
+
+interface PoseLandmark {
+  x: number;
+  y: number;
+  visibility?: number;
+}
+
+/**
+ * Reduces a 33-point body to the two wrists, scaled by the torso.
+ *
+ * Pose landmarks are always emitted, even for a wrist far out of frame, so
+ * each is gated on the model's own visibility score; a wrist below the bar is
+ * simply not returned and the detector treats it as a hand it can't see.
+ *
+ * `aspect` (frame width / height) converts x into the same units as y, so the
+ * torso length holds as the player turns.
+ */
+export function observePose(pose: PoseLandmark[] | undefined, aspect: number): HandObservation[] {
+  if (!pose || pose.length < 25) return [];
+  const span = (a: PoseLandmark, b: PoseLandmark) =>
+    Math.hypot((a.x - b.x) * aspect, a.y - b.y);
+  const seen = (p: PoseLandmark, min: number) => (p.visibility ?? 1) >= min;
+
+  const ls = pose[L_SHOULDER];
+  const rs = pose[R_SHOULDER];
+  const lh = pose[L_HIP];
+  const rh = pose[R_HIP];
+  if (!seen(ls, 0.3) || !seen(rs, 0.3)) return [];
+
+  // Torso length: shoulder midpoint to hip midpoint. Hips are often below the
+  // bottom edge at a desk, so fall back to shoulder width when they're gone.
+  let torso: number;
+  if (seen(lh, 0.3) && seen(rh, 0.3)) {
+    torso = span(
+      { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2 },
+      { x: (lh.x + rh.x) / 2, y: (lh.y + rh.y) / 2 },
+    );
+  } else {
+    torso = span(ls, rs) * SHOULDERS_TO_TORSO;
+  }
+  const scale = Math.max(MIN_SCALE, torso * TORSO_TO_PALM);
+
+  const out: HandObservation[] = [];
+  const wrists: [number, PoseLandmark][] = [
+    [L_WRIST, pose[L_WRIST]],
+    [R_WRIST, pose[R_WRIST]],
+  ];
+  for (const [index, w] of wrists) {
+    if (!seen(w, WRIST_VISIBILITY)) continue;
+    if (w.x < -0.05 || w.x > 1.05 || w.y < -0.05 || w.y > 1.05) continue;
+    out.push({ index, x: w.x, y: w.y, scale });
+  }
+  return out;
+}

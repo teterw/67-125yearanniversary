@@ -224,7 +224,7 @@ export default function SettingsPage() {
             entries={board}
             limit={100}
             emptyLabel="Nothing saved yet."
-            onRemove={(id) => removeScore(id)}
+            onRemove={(id) => void removeScore(id).catch(() => {})}
           />
           <div className="flex flex-wrap gap-2 pt-4">
             <button
@@ -234,7 +234,7 @@ export default function SettingsPage() {
                   setConfirmClear(true);
                   return;
                 }
-                clearLeaderboard();
+                void clearLeaderboard().catch(() => {});
                 setConfirmClear(false);
               }}
               onBlur={() => setConfirmClear(false)}
@@ -259,7 +259,7 @@ export default function SettingsPage() {
         <Contributors className="pt-2" />
 
         <p className="pb-6 pt-6 text-center text-xs text-white/30">
-          Times and settings live in this browser&apos;s local storage only.
+          Settings live in this browser; the leaderboard is shared across every device.
         </p>
       </div>
     </div>

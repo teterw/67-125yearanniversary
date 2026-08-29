@@ -7,6 +7,7 @@ import {
   SETTINGS_EVENT,
   loadLeaderboard,
   loadSettings,
+  syncLeaderboard,
   type ScoreEntry,
   type Settings,
 } from "./storage";
@@ -19,7 +20,7 @@ import {
 
 const EMPTY_BOARD: ScoreEntry[] = [];
 
-function makeStore<T>(read: () => T, serverValue: T, event: string) {
+function makeStore<T>(read: () => T, serverValue: T, event: string, onFirstSubscribe?: () => void) {
   let cache: T | null = null;
   const listeners = new Set<() => void>();
 
@@ -35,6 +36,7 @@ function makeStore<T>(read: () => T, serverValue: T, event: string) {
         window.addEventListener(event, invalidate);
         // Fires when another tab writes; keeps two open windows in step.
         window.addEventListener("storage", invalidate);
+        onFirstSubscribe?.();
       }
       return () => {
         listeners.delete(listener);
@@ -51,7 +53,15 @@ function makeStore<T>(read: () => T, serverValue: T, event: string) {
 }
 
 const settingsStore = makeStore<Settings>(loadSettings, DEFAULT_SETTINGS, SETTINGS_EVENT);
-const boardStore = makeStore<ScoreEntry[]>(loadLeaderboard, EMPTY_BOARD, BOARD_EVENT);
+/** Refetch cadence while someone is looking at a board, so a rival's new time shows up. */
+const BOARD_POLL_MS = 15000;
+let boardPoll: number | null = null;
+
+const boardStore = makeStore<ScoreEntry[]>(loadLeaderboard, EMPTY_BOARD, BOARD_EVENT, () => {
+  const pull = () => void syncLeaderboard().catch(() => {});
+  pull();
+  if (boardPoll === null) boardPoll = window.setInterval(pull, BOARD_POLL_MS);
+});
 
 export function useSettings(): Settings {
   return useSyncExternalStore(

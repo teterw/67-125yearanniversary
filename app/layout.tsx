@@ -1,10 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Noto_Sans_Thai } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+// Thai carries stacked vowel and tone marks above and below the baseline, so
+// the UI face has to ship the Thai subset; Latin rides along for the numerals
+// and the 67 branding. Loaded as a variable font so every weight is on hand.
+const notoSansThai = Noto_Sans_Thai({
+  variable: "--font-noto-sans-thai",
+  subsets: ["thai", "latin"],
+  display: "swap",
 });
 
 const geistMono = Geist_Mono({
@@ -13,9 +17,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "67 × 125 — Anniversary Race",
+  title: "67 × 125 — แข่งความเร็ว 125 ปี",
   description:
-    "Camera-tracked six-seven race to 125, for the 125th anniversary of the Brothers of St. Gabriel, Province of Thailand.",
+    "เกมแข่งทำท่า 6-7 ให้ครบ 125 ครั้งผ่านกล้อง ฉลอง 125 ปี คณะภราดาเซนต์คาเบรียล แขวงประเทศไทย",
 };
 
 export const viewport: Viewport = {
@@ -28,8 +32,8 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      lang="th"
+      className={`${notoSansThai.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">{children}</body>
     </html>
